@@ -1,0 +1,183 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Custom properties ──────────────────────────────────── */
+:root {
+  --pitch-dark:  #0a1628;
+  --pitch-card:  #0f1f3d;
+  --pitch-border:#1e3a5f;
+  --brand-green: #22c55e;
+  --brand-400:   #4ade80;
+}
+
+/* ── Base resets ─────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background: var(--pitch-dark);
+    color: #f1f5f9;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar       { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #0a1628; }
+  ::-webkit-scrollbar-thumb { background: #1e3a5f; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #2d5a8e; }
+}
+
+/* ── Component classes ───────────────────────────────────── */
+@layer components {
+
+  /* Cards */
+  .card {
+    @apply bg-pitch-card border border-pitch-border rounded-2xl;
+  }
+  .card-hover {
+    @apply card transition-all duration-200 hover:border-brand-500/40 hover:shadow-lg hover:shadow-brand-500/10;
+  }
+
+  /* Buttons */
+  .btn-primary {
+    @apply bg-brand-500 hover:bg-brand-400 text-white font-display font-semibold
+           px-5 py-2.5 rounded-xl transition-all duration-150 active:scale-95
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply bg-pitch-card hover:bg-pitch-border text-white font-display font-semibold
+           px-5 py-2.5 rounded-xl border border-pitch-border transition-all duration-150
+           active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-danger {
+    @apply bg-score-wicket/20 hover:bg-score-wicket/30 text-score-wicket font-display
+           font-semibold px-5 py-2.5 rounded-xl border border-score-wicket/30
+           transition-all duration-150 active:scale-95;
+  }
+  .btn-ghost {
+    @apply text-slate-400 hover:text-white hover:bg-white/5 px-3 py-2 rounded-lg
+           transition-all duration-150;
+  }
+
+  /* Inputs */
+  .input-field {
+    @apply w-full bg-pitch-dark border border-pitch-border rounded-xl px-4 py-3
+           text-white placeholder-slate-500 font-body text-sm
+           focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50
+           transition-colors;
+  }
+
+  /* Score ball chips */
+  .ball-chip {
+    @apply inline-flex items-center justify-center w-8 h-8 rounded-full
+           font-mono font-bold text-xs border-2;
+  }
+  .ball-dot    { @apply ball-chip bg-slate-800 border-slate-600 text-slate-400; }
+  .ball-run    { @apply ball-chip bg-slate-700 border-slate-500 text-white; }
+  .ball-four   { @apply ball-chip bg-score-four/20 border-score-four text-score-four; }
+  .ball-six    { @apply ball-chip bg-score-six/20 border-score-six text-score-six; }
+  .ball-wicket { @apply ball-chip bg-score-wicket/20 border-score-wicket text-score-wicket; }
+  .ball-wide   { @apply ball-chip bg-score-wide/20 border-score-wide text-score-wide; }
+  .ball-noball { @apply ball-chip bg-score-noball/20 border-score-noball text-score-noball; }
+  .ball-bye    { @apply ball-chip bg-slate-600/20 border-slate-500 text-slate-300; }
+
+  /* Live badge */
+  .live-badge {
+    @apply inline-flex items-center gap-1.5 bg-score-wicket/15 text-score-wicket
+           text-xs font-display font-semibold px-2.5 py-1 rounded-full
+           border border-score-wicket/25;
+  }
+  .live-dot {
+    @apply w-1.5 h-1.5 rounded-full bg-score-wicket animate-pulse-live;
+  }
+
+  /* Score big display */
+  .score-display {
+    @apply font-display font-bold text-4xl sm:text-5xl lg:text-6xl tracking-tight;
+  }
+  .score-sub {
+    @apply font-display text-slate-400 text-sm sm:text-base;
+  }
+
+  /* Table */
+  .scorecard-table th {
+    @apply text-xs font-semibold text-slate-500 uppercase tracking-wider
+           py-2 px-3 text-right first:text-left;
+  }
+  .scorecard-table td {
+    @apply py-2.5 px-3 text-sm text-right first:text-left border-t border-pitch-border/50;
+  }
+  .scorecard-table tr:hover td { @apply bg-white/[0.02]; }
+}
+
+/* ── Utilities ───────────────────────────────────────────── */
+@layer utilities {
+  .text-balance { text-wrap: balance; }
+  .pitch-bg {
+    background: radial-gradient(ellipse at 20% 50%, rgba(34,197,94,0.05) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 20%, rgba(30,58,95,0.5) 0%, transparent 50%),
+                #0a1628;
+  }
+  .glass {
+    background: rgba(15, 31, 61, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+  .shine::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.04) 50%, transparent 60%);
+    border-radius: inherit;
+  }
+}
+
+/* ── Scoring button grid ─────────────────────────────────── */
+.scoring-btn {
+  @apply flex items-center justify-center rounded-2xl font-display font-bold
+         text-xl transition-all duration-100 active:scale-90 select-none
+         border-2 cursor-pointer min-h-[60px];
+}
+
+/* ── Mobile nav safe area ────────────────────────────────── */
+.nav-safe-bottom {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 0.75rem);
+}
+
+/* ── Page transitions ────────────────────────────────────── */
+.page-enter {
+  animation: fade-in 0.3s ease-out, slide-up 0.3s ease-out;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { transform: translateY(12px); }
+  to   { transform: translateY(0); }
+}
+
+@keyframes score-pop {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.35) rotate(-3deg); }
+  100% { transform: scale(1); }
+}
+
+.animate-score-pop { animation: score-pop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+
+/* ── Skeleton loader ─────────────────────────────────────── */
+.skeleton {
+  @apply bg-pitch-card rounded-lg animate-pulse;
+}
+
+/* ── Number display ──────────────────────────────────────── */
+.tabular { font-variant-numeric: tabular-nums; }
