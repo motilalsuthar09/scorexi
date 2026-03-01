@@ -2,15 +2,15 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, PlusCircle, Users, User, Search } from 'lucide-react';
+import { Home, PlusCircle, Users, User, Trophy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
-  { href: '/',         label: 'Home',    icon: Home       },
-  { href: '/matches',  label: 'Matches', icon: Search     },
-  { href: '/new-match',label: 'Score',   icon: PlusCircle, primary: true },
-  { href: '/players',  label: 'Players', icon: Users      },
-  { href: '/profile',  label: 'Profile', icon: User       },
+  { href: '/',            label: 'Home',   icon: Home       },
+  { href: '/leaderboard', label: 'Top',    icon: Trophy     },
+  { href: '/new-match',   label: 'Score',  icon: PlusCircle, primary: true },
+  { href: '/players',     label: 'Players',icon: Users      },
+  { href: '/profile',     label: 'Profile',icon: User       },
 ];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {

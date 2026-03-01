@@ -2,13 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Custom properties ──────────────────────────────────── */
+/* ============================================================
+   ScoreXI THEME SYSTEM
+   Change the ENTIRE app theme by editing ONLY 2 lines:
+   --brand-primary  = main accent color
+   --brand-light    = lighter shade
+
+   THEME OPTIONS (swap just these 2 hex values):
+   Green  (default): #22c55e / #4ade80
+   Blue:             #2563eb / #60a5fa
+   Purple:           #7c3aed / #a78bfa
+   Red:              #dc2626 / #f87171
+   Gold:             #d97706 / #fbbf24
+   Cyan:             #0891b2 / #22d3ee
+============================================================ */
 :root {
-  --pitch-dark:  #0a1628;
-  --pitch-card:  #0f1f3d;
-  --pitch-border:#1e3a5f;
-  --brand-green: #22c55e;
-  --brand-400:   #4ade80;
+  /* CHANGE ONLY THESE 2 LINES TO RETHEME ENTIRE APP */
+  --brand-primary: #22c55e;
+  --brand-light:   #4ade80;
+
+  /* Background and surface - change for dark/light mode */
+  --bg-base:   #0a1628;
+  --bg-card:   #0f1f3d;
+  --bg-border: #1e3a5f;
+  --bg-muted:  #2d5a8e;
+
+  /* Score event colors */
+  --score-four:   #3b82f6;
+  --score-six:    #a855f7;
+  --score-wicket: #ef4444;
+  --score-wide:   #f59e0b;
+  --score-noball: #f97316;
 }
 
 /* ── Base resets ─────────────────────────────────────────── */

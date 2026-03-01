@@ -68,11 +68,15 @@ export const viewport: Viewport = {
   maximumScale: 1,
 };
 
+import { AuthProvider } from '@/components/auth/AuthProvider';
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${rajdhani.variable} ${inter.variable} ${jetbrains.variable}`}>
       <body className="bg-pitch-dark text-white font-body antialiased">
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );

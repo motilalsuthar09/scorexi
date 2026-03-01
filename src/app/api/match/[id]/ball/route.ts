@@ -214,6 +214,13 @@ export async function POST(
           result,
           completedAt: new Date(),
         });
+
+        // Async stats sync — don't await (non-blocking)
+        fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/stats/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ matchId: match._id.toString() }),
+        }).catch(e => console.error('Stats sync failed:', e));
       }
     }
 
