@@ -23,8 +23,10 @@ const ballSchema = z.object({
   isWicket:          z.boolean().default(false),
   dismissalType:     z.string().nullable().default(null),
   dismissedPlayerId: z.string().nullable().default(null),
-  newStrikerId:      z.string().nullable().default(null),  // new batsman after wicket
-  newNonStrikerId:   z.string().nullable().default(null),  // strike rotation
+  fielderPlayerId:   z.string().nullable().default(null),
+  newBatsmanId:      z.string().nullable().default(null),
+  newStrikerId:      z.string().nullable().default(null),
+  newNonStrikerId:   z.string().nullable().default(null),
 });
 
 export async function POST(
@@ -106,9 +108,9 @@ export async function POST(
     let newStrikerId    = innings.currentStrikerId?.toString();
     let newNonStrikerId = innings.currentNonStrikerId?.toString();
 
-    if (d.isWicket && d.newStrikerId) {
-      // Dismissed batsman replaced
-      newStrikerId = d.newStrikerId;
+    if (d.isWicket && (d.newBatsmanId || d.newStrikerId)) {
+      // Dismissed batsman replaced — new batsman takes the striker's position
+      newStrikerId = d.newBatsmanId || d.newStrikerId;
     } else if (d.runsOffBat % 2 !== 0 && legal && !d.isWicket) {
       // Odd runs rotate strike (unless wide/no-ball)
       [newStrikerId, newNonStrikerId] = [newNonStrikerId!, newStrikerId!];
@@ -225,17 +227,19 @@ export async function POST(
     }
 
     return apiSuccess({
-      ball:          ball._id.toString(),
-      inningsRuns:   newTotalRuns,
+      ball:           ball._id.toString(),
+      inningsRuns:    newTotalRuns,
       inningsWickets: newWickets,
-      totalBalls:    newTotalBalls,
+      totalBalls:     newTotalBalls,
       overNumber,
-      ballInOver:    ballInOver + (legal ? 1 : 0),
+      ballInOver:     ballInOver + (legal ? 1 : 0),
       inningsOver,
+      overComplete:   completedOver && !inningsOver,
       matchStatus,
       result,
       newStrikerId,
       newNonStrikerId,
+      newBowlerId:    null,  // bowler unchanged — frontend decides
     }, 201);
 
   } catch (err) {

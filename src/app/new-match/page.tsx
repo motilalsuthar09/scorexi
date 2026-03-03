@@ -9,6 +9,7 @@ import {
   Plus, X, Users, Trophy, Zap
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { saveHostedMatch } from '@/lib/hostedMatches';
 
 type PlayerEntry = { name: string; existingPlayerId?: string };
 
@@ -80,6 +81,8 @@ export default function NewMatchPage() {
       });
       const json = await res.json();
       if (json.success) {
+        const title = form.title || `${form.teamAName} vs ${form.teamBName}`;
+        saveHostedMatch(json.data.matchId, json.data.shareToken, title);
         router.push(`/scoring/${json.data.matchId}?token=${json.data.shareToken}`);
       } else {
         setError(json.error || 'Failed to create match');
