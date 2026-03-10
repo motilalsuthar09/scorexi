@@ -1,8 +1,10 @@
+// src/components/layout/AppShell.tsx
 'use client';
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, PlusCircle, Users, User, Trophy, ClipboardList } from 'lucide-react';
+import { Suspense } from 'react';
+import { Home, PlusCircle, Users, User, Trophy, ClipboardList, History } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
@@ -13,54 +15,115 @@ const navItems = [
   { href: '/profile',     label: 'Profile', icon: User          },
 ];
 
-export default function AppShell({ children }: { children: React.ReactNode }) {
+// NavLinks is a separate component so its usePathname() is isolated in Suspense
+function NavLinks() {
   const pathname = usePathname();
+  return (
+    <>
+      {navItems.filter(i => !i.primary).map(item => (
+        <Link key={item.href} href={item.href}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-body transition-all duration-150',
+            pathname === item.href
+              ? 'bg-brand-500/10 text-brand-400'
+              : 'text-slate-400 hover:text-white hover:bg-white/5'
+          )}>
+          <item.icon size={16} />{item.label}
+        </Link>
+      ))}
+      <Link href="/players"
+        className={cn(
+          'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-body transition-all duration-150',
+          pathname === '/players'
+            ? 'bg-brand-500/10 text-brand-400'
+            : 'text-slate-400 hover:text-white hover:bg-white/5'
+        )}>
+        <Users size={16} />Players
+      </Link>
+      <Link href="/matches"
+        className={cn(
+          'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-body transition-all duration-150',
+          pathname === '/matches'
+            ? 'bg-brand-500/10 text-brand-400'
+            : 'text-slate-400 hover:text-white hover:bg-white/5'
+        )}>
+        <History size={16} />History
+      </Link>
+    </>
+  );
+}
 
+function MobilePlayersLink() {
+  const pathname = usePathname();
+  return (
+    <Link href="/players"
+      className={cn('p-2 rounded-lg transition-all',
+        pathname === '/players' ? 'text-brand-400' : 'text-slate-400 hover:text-white')}>
+      <Users size={18} />
+    </Link>
+  );
+}
+
+function BottomNav() {
+  const pathname = usePathname();
+  return (
+    <div className="grid grid-cols-5 h-16">
+      {navItems.map(item => {
+        const active = pathname === item.href;
+        return (
+          <Link key={item.href} href={item.href}
+            className={cn(
+              'flex flex-col items-center justify-center gap-0.5 transition-all duration-150',
+              item.primary && 'relative'
+            )}>
+            {item.primary ? (
+              <div className="w-12 h-12 rounded-2xl flex items-center justify-center -mt-6
+                              bg-brand-500 shadow-lg shadow-brand-500/40 transition-transform active:scale-90">
+                <item.icon size={22} className="text-white" />
+              </div>
+            ) : (
+              <>
+                <item.icon size={20} className={active ? 'text-brand-400' : 'text-slate-500'} />
+                <span className={cn('text-[10px] font-body', active ? 'text-brand-400' : 'text-slate-500')}>
+                  {item.label}
+                </span>
+              </>
+            )}
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex flex-col min-h-dvh">
+
       {/* ── Desktop top navbar ─────────────────────────── */}
       <header className="hidden md:block glass sticky top-0 z-40 border-b border-pitch-border">
         <nav className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          {/* Logo */}
           <Link href="/" className="flex items-center gap-2 group">
-            <div className="w-8 h-8 bg-brand-500 rounded-lg flex items-center justify-center
-                            group-hover:bg-brand-400 transition-colors">
+            <div className="w-8 h-8 bg-brand-500 rounded-lg flex items-center justify-center group-hover:bg-brand-400 transition-colors">
               <span className="font-display font-bold text-white text-sm">XI</span>
             </div>
             <span className="font-display font-bold text-xl text-white tracking-wide">
               Score<span className="text-brand-400">XI</span>
             </span>
           </Link>
-
-          {/* Desktop nav links */}
           <div className="flex items-center gap-1">
-            {navItems.filter(i => !i.primary).map(item => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-body',
-                  'transition-all duration-150',
-                  pathname === item.href
-                    ? 'bg-brand-500/10 text-brand-400'
-                    : 'text-slate-400 hover:text-white hover:bg-white/5'
-                )}
-              >
-                <item.icon size={16} />
-                {item.label}
-              </Link>
-            ))}
+            {/* Suspense wraps the usePathname hook — fixes "PathnameContext null" crash */}
+            <Suspense fallback={null}>
+              <NavLinks />
+            </Suspense>
           </div>
-
-          {/* CTA */}
           <Link href="/new-match" className="btn-primary flex items-center gap-2 text-sm py-2">
-            <PlusCircle size={16} />
-            New Match
+            <PlusCircle size={16} />New Match
           </Link>
         </nav>
       </header>
 
-      {/* ── Mobile top bar (logo only) ─────────────────── */}
+      {/* ── Mobile top bar ─────────────────────────────── */}
       <header className="md:hidden glass sticky top-0 z-40 border-b border-pitch-border">
         <div className="px-4 h-14 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
@@ -71,10 +134,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               Score<span className="text-brand-400">XI</span>
             </span>
           </Link>
-          <Link href="/new-match" className="btn-primary py-1.5 px-3 text-xs flex items-center gap-1">
-            <PlusCircle size={13} />
-            New
-          </Link>
+          <div className="flex items-center gap-2">
+            <Suspense fallback={null}>
+              <MobilePlayersLink />
+            </Suspense>
+            <Link href="/new-match" className="btn-primary py-1.5 px-3 text-xs flex items-center gap-1">
+              <PlusCircle size={13} />New
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -85,44 +152,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* ── Mobile bottom navigation ───────────────────── */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 glass border-t border-pitch-border nav-safe-bottom">
-        <div className="grid grid-cols-5 h-16">
-          {navItems.map(item => {
-            const active = pathname === item.href;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  'flex flex-col items-center justify-center gap-0.5 transition-all duration-150',
-                  item.primary && 'relative',
-                )}
-              >
-                {item.primary ? (
-                  <div className={cn(
-                    'w-12 h-12 rounded-2xl flex items-center justify-center -mt-6',
-                    'bg-brand-500 shadow-lg shadow-brand-500/40',
-                    'transition-transform active:scale-90'
-                  )}>
-                    <item.icon size={22} className="text-white" />
-                  </div>
-                ) : (
-                  <>
-                    <item.icon
-                      size={20}
-                      className={active ? 'text-brand-400' : 'text-slate-500'}
-                    />
-                    <span className={cn(
-                      'text-[10px] font-body',
-                      active ? 'text-brand-400' : 'text-slate-500'
-                    )}>
-                      {item.label}
-                    </span>
-                  </>
-                )}
-              </Link>
-            );
-          })}
-        </div>
+        <Suspense fallback={
+          <div className="grid grid-cols-5 h-16">
+            {navItems.map(i => <div key={i.href} className="flex flex-col items-center justify-center" />)}
+          </div>
+        }>
+          <BottomNav />
+        </Suspense>
       </nav>
     </div>
   );

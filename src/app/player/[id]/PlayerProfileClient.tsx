@@ -1,24 +1,75 @@
+// src/app/player/[id]/PlayerProfileClient.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
 import AppShell from '@/components/layout/AppShell';
-import Link from 'next/link';
+import Link     from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
 import {
   Loader2, AlertCircle, Shield, ArrowLeft,
-  Trophy, Target, Zap, Star, TrendingUp, CheckCircle
+  Trophy, Target, Zap, Star, TrendingUp,
+  CheckCircle, ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface Props { id: string }
 
+// ── Mini batting + bowling stat chips ─────────────────────
+function MatchStatChips({ stats }: { stats: any }) {
+  const { batting, bowling } = stats ?? {};
+  const chips = [];
+
+  if (batting) {
+    const notOut = batting.dismissed === false ? '*' : '';
+    chips.push(
+      <span key="bat" className={cn(
+        'inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border font-display font-semibold',
+        batting.runs >= 50
+          ? 'bg-score-wide/15 border-score-wide/30 text-score-wide'
+          : batting.runs >= 30
+          ? 'bg-white/5 border-pitch-border text-white'
+          : 'bg-pitch-dark border-pitch-border text-slate-400'
+      )}>
+        🏏 {batting.runs}{notOut}
+        <span className="font-normal text-slate-500">({batting.balls})</span>
+        {batting.sixes > 0 && <span className="text-score-six ml-0.5">{batting.sixes}×6</span>}
+        {batting.fours > 0 && <span className="text-score-four ml-0.5">{batting.fours}×4</span>}
+      </span>
+    );
+  }
+
+  if (bowling) {
+    chips.push(
+      <span key="bowl" className={cn(
+        'inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border font-display font-semibold',
+        bowling.wickets >= 3
+          ? 'bg-score-wicket/15 border-score-wicket/30 text-score-wicket'
+          : bowling.wickets > 0
+          ? 'bg-white/5 border-pitch-border text-white'
+          : 'bg-pitch-dark border-pitch-border text-slate-400'
+      )}>
+        ⚾ {bowling.wickets}/{bowling.runs}
+        <span className="font-normal text-slate-500">({bowling.overs})</span>
+      </span>
+    );
+  }
+
+  if (chips.length === 0) {
+    chips.push(
+      <span key="dnb" className="text-xs text-slate-600 italic">Did not bat/bowl</span>
+    );
+  }
+
+  return <div className="flex flex-wrap gap-1.5 mt-2">{chips}</div>;
+}
+
 export default function PlayerProfileClient({ id }: Props) {
   const { user }  = useAuth();
-  const [data, setData]         = useState<any>(null);
-  const [loading, setLoading]   = useState(true);
+  const [data,    setData]     = useState<any>(null);
+  const [loading, setLoading]  = useState(true);
   const [claiming, setClaiming] = useState(false);
   const [claimMsg, setClaimMsg] = useState('');
-  const [tab, setTab]           = useState<'batting' | 'bowling' | 'matches'>('batting');
+  const [tab,     setTab]      = useState<'batting' | 'bowling' | 'matches'>('batting');
 
   useEffect(() => {
     fetch(`/api/player/${id}`)
@@ -60,8 +111,7 @@ export default function PlayerProfileClient({ id }: Props) {
 
   const { player, derived, recentMatches } = data;
   const { batting, bowling } = derived;
-
-  const isOwner = user?.claimedPlayerId === id || user?.claimedPlayerId === player._id;
+  const isOwner  = user?.claimedPlayerId === id || user?.claimedPlayerId === player._id;
   const canClaim = user && !user.isGuest && !player.isClaimed && !user.claimedPlayerId;
 
   return (
@@ -111,10 +161,9 @@ export default function PlayerProfileClient({ id }: Props) {
               </p>
             </div>
 
-            {/* Edit button for owner */}
             {isOwner && (
               <Link href="/profile" className="btn-secondary py-1.5 px-3 text-xs flex-shrink-0">
-                Edit Profile
+                Edit
               </Link>
             )}
           </div>
@@ -124,7 +173,7 @@ export default function PlayerProfileClient({ id }: Props) {
             <div className="mt-4 p-3 bg-score-wide/10 border border-score-wide/25 rounded-xl">
               <p className="text-sm text-white font-semibold mb-1">Is this you?</p>
               <p className="text-xs text-slate-400 mb-2">
-                Claim this profile to own your stats and career history.
+                Claim this profile to own your stats.
               </p>
               {claimMsg ? (
                 <p className={cn('text-sm font-semibold',
@@ -156,10 +205,10 @@ export default function PlayerProfileClient({ id }: Props) {
         {/* Quick stats row */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
           {[
-            { label: 'Runs',      value: player.stats.totalRuns,    icon: Trophy,    color: 'text-score-wide' },
-            { label: 'Wickets',   value: player.stats.totalWickets, icon: Target,    color: 'text-score-wicket' },
-            { label: 'Best Score',value: player.stats.highestScore, icon: Star,      color: 'text-score-six' },
-            { label: 'Matches',   value: player.stats.matchesPlayed,icon: TrendingUp, color: 'text-brand-400' },
+            { label: 'Runs',       value: player.stats.totalRuns,     icon: Trophy,     color: 'text-score-wide'   },
+            { label: 'Wickets',    value: player.stats.totalWickets,  icon: Target,     color: 'text-score-wicket' },
+            { label: 'Best Score', value: player.stats.highestScore,  icon: Star,       color: 'text-score-six'    },
+            { label: 'Matches',    value: player.stats.matchesPlayed, icon: TrendingUp, color: 'text-brand-400'    },
           ].map(s => (
             <div key={s.label} className="card p-4 text-center">
               <s.icon size={16} className={cn('mx-auto mb-1', s.color)} />
@@ -193,15 +242,15 @@ export default function PlayerProfileClient({ id }: Props) {
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               {[
-                { label: 'Total Runs',    value: player.stats.totalRuns },
-                { label: 'Average',       value: batting.average || '—' },
-                { label: 'Strike Rate',   value: batting.strikeRate ? `${batting.strikeRate}` : '—' },
-                { label: 'Highest Score', value: player.stats.highestScore },
-                { label: 'Fours (4s)',    value: player.stats.totalFours },
-                { label: 'Sixes (6s)',    value: player.stats.totalSixes },
-                { label: 'Balls Faced',   value: player.stats.totalBallsFaced },
-                { label: 'Not Outs',      value: player.stats.notOuts },
-                { label: 'Innings',       value: batting.innings },
+                { label: 'Total Runs',    value: player.stats.totalRuns                         },
+                { label: 'Average',       value: batting.average     || '—'                     },
+                { label: 'Strike Rate',   value: batting.strikeRate  ? `${batting.strikeRate}` : '—' },
+                { label: 'Highest Score', value: player.stats.highestScore                       },
+                { label: 'Fours (4s)',    value: player.stats.totalFours                         },
+                { label: 'Sixes (6s)',    value: player.stats.totalSixes                         },
+                { label: 'Balls Faced',   value: player.stats.totalBallsFaced                    },
+                { label: 'Not Outs',      value: player.stats.notOuts                            },
+                { label: 'Innings',       value: batting.innings                                 },
               ].map(s => (
                 <div key={s.label} className="bg-pitch-dark rounded-xl p-3">
                   <p className="text-slate-500 text-xs mb-1">{s.label}</p>
@@ -223,13 +272,13 @@ export default function PlayerProfileClient({ id }: Props) {
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                 {[
-                  { label: 'Wickets',      value: player.stats.totalWickets },
-                  { label: 'Best Bowling', value: bowling.bestBowling },
-                  { label: 'Economy',      value: bowling.economy || '—' },
-                  { label: 'Average',      value: bowling.average || '—' },
-                  { label: 'Strike Rate',  value: bowling.strikeRate || '—' },
-                  { label: 'Overs',        value: bowling.overs },
-                  { label: 'Runs Conceded',value: player.stats.totalRunsConceded },
+                  { label: 'Wickets',       value: player.stats.totalWickets    },
+                  { label: 'Best Bowling',  value: bowling.bestBowling           },
+                  { label: 'Economy',       value: bowling.economy    || '—'     },
+                  { label: 'Average',       value: bowling.average    || '—'     },
+                  { label: 'Strike Rate',   value: bowling.strikeRate || '—'     },
+                  { label: 'Overs',         value: bowling.overs                 },
+                  { label: 'Runs Conceded', value: player.stats.totalRunsConceded },
                 ].map(s => (
                   <div key={s.label} className="bg-pitch-dark rounded-xl p-3">
                     <p className="text-slate-500 text-xs mb-1">{s.label}</p>
@@ -241,30 +290,40 @@ export default function PlayerProfileClient({ id }: Props) {
           </div>
         )}
 
-        {/* Match history */}
+        {/* Match history with per-match stats */}
         {tab === 'matches' && (
           <div className="space-y-3 animate-fade-in">
+            <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold px-1">
+              Recent Matches — {player.name}'s performances
+            </p>
             {recentMatches.length === 0 ? (
               <div className="card p-8 text-center">
                 <p className="text-slate-400">No public match history yet.</p>
               </div>
             ) : recentMatches.map((m: any) => (
-              <Link key={m._id} href={`/match/${m._id}`}>
+              <Link key={m._id} href={`/match/${m._id}`} className="block">
                 <div className="card-hover p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-display font-semibold text-white text-sm">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-display font-semibold text-white text-sm truncate">
                         {m.title || `${m.teamA.name} vs ${m.teamB.name}`}
                       </p>
-                      <p className="text-slate-400 text-xs mt-0.5">
+                      <p className="text-slate-500 text-xs mt-0.5">
                         {m.teamA.name} vs {m.teamB.name} · {m.totalOvers} overs
                       </p>
+
+                      {/* Per-match stat chips */}
+                      <MatchStatChips stats={m.playerStats} />
                     </div>
-                    {m.result && (
-                      <span className="text-xs text-brand-400 font-semibold">
-                        {m.result.winnerName} won
-                      </span>
-                    )}
+
+                    <div className="text-right flex-shrink-0 ml-2">
+                      {m.result && (
+                        <p className="text-xs text-brand-400 font-semibold whitespace-nowrap">
+                          {m.result.winnerName} won
+                        </p>
+                      )}
+                      <ChevronRight size={14} className="text-slate-600 ml-auto mt-1" />
+                    </div>
                   </div>
                 </div>
               </Link>
