@@ -3,15 +3,16 @@
 // POST /api/match/[id]/ball  — Record a delivery (atomic)
 // DELETE /api/match/[id]/ball — Undo last ball
 //
-// FIX (Bug 1): Accept currentNonStrikerId in payload so DB is
-// bootstrapped on the very first ball — prevents the setup modal
-// from reappearing when the user switches tabs and comes back.
+// Phase 3 additions:
+//  - Push notification fired on wicket or six (async, non-blocking)
+//  - Stats sync via direct import (no NEXT_PUBLIC_APP_URL needed)
 // ============================================================
 import { NextRequest } from 'next/server';
 import { connectDB }   from '@/lib/db';
 import Match           from '@/models/Match';
 import Innings         from '@/models/Innings';
 import Ball            from '@/models/Ball';
+import mongoose, { Schema, Model, Document } from 'mongoose';
 import {
   apiSuccess, apiError, isLegalDelivery,
   getClientIp, checkRateLimit,
@@ -22,7 +23,6 @@ const ballSchema = z.object({
   inningsId:            z.string(),
   batsmanId:            z.string(),
   bowlerId:             z.string(),
-  // NEW: the current non-striker's ID (always sent from frontend)
   currentNonStrikerId:  z.string().nullable().default(null),
   runsOffBat:           z.number().int().min(0).max(6),
   extraType:            z.enum(['wide', 'no_ball', 'bye', 'leg_bye']).nullable().default(null),
@@ -35,6 +35,62 @@ const ballSchema = z.object({
   newNonStrikerId:      z.string().nullable().default(null),
 });
 
+// ── PushSub model (inline — avoids separate model file) ───
+interface PushSubDoc extends Document {
+  matchId:  string;
+  endpoint: string;
+  keys:     { p256dh: string; auth: string };
+}
+const PushSub: Model<PushSubDoc> =
+  mongoose.models.PushSub ||
+  mongoose.model<PushSubDoc>('PushSub', new Schema<PushSubDoc>({
+    matchId:  { type: String, required: true, index: true },
+    endpoint: { type: String, required: true },
+    keys:     { p256dh: String, auth: String },
+  }, { timestamps: true }));
+
+// ── Push helpers ──────────────────────────────────────────
+
+/**
+ * Fire-and-forget push notification to all subscribers of a match.
+ * Uses the web-push library if VAPID keys are configured; silently
+ * skips if not (dev environments without keys set).
+ */
+async function firePush(matchId: string, title: string, body: string): Promise<void> {
+  const publicKey  = process.env.NEXT_PUBLIC_VAPID_KEY;
+  const privateKey = process.env.VAPID_PRIVATE_KEY;
+  const email      = process.env.VAPID_EMAIL ?? 'mailto:admin@scorexi.app';
+
+  if (!publicKey || !privateKey) return; // VAPID not configured — skip silently
+
+  try {
+    const webpush = await import('web-push');
+    webpush.default.setVapidDetails(email, publicKey, privateKey);
+
+    const subs = await PushSub.find({ matchId }).lean();
+    if (!subs.length) return;
+
+    const payload = JSON.stringify({ title, body, matchId });
+
+    await Promise.allSettled(
+      subs.map(sub =>
+        webpush.default.sendNotification(
+          { endpoint: sub.endpoint, keys: sub.keys as any },
+          payload
+        ).catch(async (err: any) => {
+          // 410 Gone = subscription expired — clean it up
+          if (err.statusCode === 410) {
+            await PushSub.deleteOne({ _id: sub._id });
+          }
+        })
+      )
+    );
+  } catch (err) {
+    console.warn('[Push] Failed to send notifications:', err);
+  }
+}
+
+// ── POST — Record delivery ────────────────────────────────
 export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } }
@@ -62,16 +118,12 @@ export async function POST(
     if (innings.isCompleted)           return apiError('Innings is completed', 400);
     if (match.status === 'completed')  return apiError('Match is completed', 400);
 
-    // ── Same-player guards ──────────────────────────────
     if (d.batsmanId === d.bowlerId) {
       return apiError('Batsman and bowler cannot be the same player', 422);
     }
 
     const allowSingleBat = match.settings?.allowSinglePlayerBat ?? false;
 
-    // FIX (Bug 1): Bootstrap striker/nonStriker from payload if DB is null.
-    // This happens on the very first ball of a new innings — DB has nulls because
-    // the setup modal only wrote to CLIENT STATE, not server.
     const currentStriker    = innings.currentStrikerId?.toString()    || d.batsmanId;
     const currentNonStriker = innings.currentNonStrikerId?.toString() || d.currentNonStrikerId || '';
 
@@ -82,20 +134,17 @@ export async function POST(
     const legal      = isLegalDelivery(d.extraType);
     const wideRuns   = match.settings?.wideRuns ?? 1;
 
-    // ── Compute extras runs ─────────────────────────────
     let extrasRuns = 0;
     if (d.extraType === 'wide')    extrasRuns = wideRuns;
     if (d.extraType === 'no_ball') extrasRuns = 1;
     if (d.extraType === 'bye')     extrasRuns = d.runsOffBat;
     if (d.extraType === 'leg_bye') extrasRuns = d.runsOffBat;
 
-    // Runs credited to batsman (0 for wides/byes/leg-byes)
     const runsForBatsman = (d.extraType === 'bye' || d.extraType === 'leg_bye' || d.extraType === 'wide')
       ? 0
       : d.runsOffBat;
     const totalBallRuns = runsForBatsman + extrasRuns;
 
-    // ── New totals ──────────────────────────────────────
     const newTotalRuns  = innings.totalRuns  + totalBallRuns;
     const newWickets    = innings.wickets    + (d.isWicket ? 1 : 0);
     const newTotalBalls = innings.totalBalls + (legal ? 1 : 0);
@@ -104,7 +153,6 @@ export async function POST(
     const overNumber = Math.floor(innings.totalBalls / 6);
     const ballInOver = innings.totalBalls % 6;
 
-    // ── Build ball document ─────────────────────────────
     const ball = await Ball.create({
       matchId:             match._id,
       inningsId:           innings._id,
@@ -127,22 +175,18 @@ export async function POST(
       timestamp:           new Date(),
     });
 
-    // ── Extras breakdown ────────────────────────────────
     const extrasUpdate: Record<string, number> = {};
     if (d.extraType === 'wide')    extrasUpdate['extras.wides']   = (innings.extras.wides   || 0) + 1;
     if (d.extraType === 'no_ball') extrasUpdate['extras.noBalls'] = (innings.extras.noBalls || 0) + 1;
     if (d.extraType === 'bye')     extrasUpdate['extras.byes']    = (innings.extras.byes    || 0) + extrasRuns;
     if (d.extraType === 'leg_bye') extrasUpdate['extras.legByes'] = (innings.extras.legByes || 0) + extrasRuns;
 
-    // ── Strike rotation ─────────────────────────────────
-    // Use bootstrapped values (may differ from DB if this is first ball)
     let newStrikerId:    string | undefined = currentStriker;
     let newNonStrikerId: string | undefined = currentNonStriker || undefined;
 
     if (d.isWicket && (d.newBatsmanId || d.newStrikerId)) {
       newStrikerId = (d.newBatsmanId ?? d.newStrikerId) as string;
     } else if (!d.isWicket && d.extraType !== 'wide') {
-      // Rotate on odd runs off bat (works for no-ball too)
       const totalRunsForRotation = runsForBatsman
         + (d.extraType === 'bye' || d.extraType === 'leg_bye' ? extrasRuns : 0);
       if (totalRunsForRotation % 2 !== 0) {
@@ -150,13 +194,11 @@ export async function POST(
       }
     }
 
-    // End-of-over: swap after every completed legal over
     const completedOver = legal && newTotalBalls % 6 === 0;
     if (completedOver && !d.isWicket) {
       [newStrikerId, newNonStrikerId] = [newNonStrikerId, newStrikerId];
     }
 
-    // ── Innings end conditions ──────────────────────────
     const maxBalls  = match.totalOvers * 6;
     const teamSize  = innings.battingTeam === 'teamA'
       ? match.teamA.playerIds.length
@@ -170,13 +212,11 @@ export async function POST(
 
     const inningsOver = (legal && newTotalBalls >= maxBalls) || allOut || targetChased;
 
-    // ── innings_break → live transition ─────────────────
     const matchStatusUpdate: Record<string, unknown> = {};
     if (match.status === 'innings_break' && innings.inningsNumber === 2) {
       matchStatusUpdate.status = 'live';
     }
 
-    // ── Update innings ──────────────────────────────────
     await Innings.findByIdAndUpdate(innings._id, {
       totalRuns:           newTotalRuns,
       wickets:             newWickets,
@@ -190,7 +230,6 @@ export async function POST(
       isCompleted:         inningsOver,
     });
 
-    // ── Innings / match completion ──────────────────────
     let matchStatus: string = match.status;
     let result = null;
 
@@ -245,15 +284,40 @@ export async function POST(
           status: 'completed', result, completedAt: new Date(),
         });
 
-        fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/stats/sync`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ matchId: match._id.toString() }),
-        }).catch(e => console.error('Stats sync failed:', e));
+        // ── Stats sync — direct import, no NEXT_PUBLIC_APP_URL needed ──
+        import('@/lib/stats').then(({ syncStatsToPlayers }) => {
+          syncStatsToPlayers(match._id.toString())
+            .catch(e => console.error('Stats sync failed:', e));
+        });
+
+        // ── Push: match complete ───────────────────────────────────────
+        const title = match.title ?? `${teamAName} vs ${teamBName}`;
+        firePush(match._id.toString(), title, result.summary);
       }
     } else if (Object.keys(matchStatusUpdate).length > 0) {
       await Match.findByIdAndUpdate(match._id, matchStatusUpdate);
       matchStatus = 'live';
+    }
+
+    // ── Push notifications for wicket / six (mid-match) ──────────────
+    // Fire async — response is not held up by this
+    if (!inningsOver) {
+      const matchTitle = match.title ?? `${match.teamA.name} vs ${match.teamB.name}`;
+      const scoreStr   = `${newTotalRuns}/${newWickets} (${Math.floor(newTotalBalls / 6)}.${newTotalBalls % 6})`;
+
+      if (d.isWicket) {
+        firePush(
+          match._id.toString(),
+          `🎳 WICKET! — ${matchTitle}`,
+          scoreStr
+        );
+      } else if (runsForBatsman === 6) {
+        firePush(
+          match._id.toString(),
+          `💥 SIX! — ${matchTitle}`,
+          scoreStr
+        );
+      }
     }
 
     const nextBatsmanRequired = d.isWicket && !inningsOver && !d.newBatsmanId && !d.newStrikerId;
@@ -313,7 +377,6 @@ export async function DELETE(
     if (lastBall.extraType === 'bye')     extrasRevert['extras.byes']    = Math.max(0, (innings.extras.byes    || 0) - lastBall.extras);
     if (lastBall.extraType === 'leg_bye') extrasRevert['extras.legByes'] = Math.max(0, (innings.extras.legByes || 0) - lastBall.extras);
 
-    // Restore: the batsmanId on the last ball WAS the striker for that ball
     const restoredStrikerId = lastBall.batsmanId.toString();
     const restoredBowlerId  = lastBall.bowlerId.toString();
 

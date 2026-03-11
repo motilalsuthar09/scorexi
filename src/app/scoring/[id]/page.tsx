@@ -3,18 +3,23 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import AppShell      from '@/components/layout/AppShell';
-import ScoringPanel  from '@/components/scoring/ScoringPanel';
-import ScorecardView from '@/components/scoring/ScorecardView';
-import Link          from 'next/link';
+import AppShell          from '@/components/layout/AppShell';
+import ScoringPanel      from '@/components/scoring/ScoringPanel';
+import ScorecardView     from '@/components/scoring/ScorecardView';
+import ShareSheet        from '@/components/share/ShareSheet';
+import CommentaryFeed    from '@/components/scoring/CommentaryFeed';
+import OverAnalysis      from '@/components/scoring/OverAnalysis';
+import PartnershipTracker from '@/components/scoring/PartnershipTracker';
+import Link              from 'next/link';
 import {
   Share2, Loader2, AlertCircle,
   TrendingUp, Activity, ArrowRight, Trophy,
-  Play, RotateCcw,
+  Play, Bell, BellOff,
 } from 'lucide-react';
 import { cn, ballsToOvers } from '@/lib/utils';
+import { subscribeToPush } from '@/lib/pwa';
 
-type Tab = 'score' | 'scorecard' | 'share';
+type Tab = 'score' | 'scorecard' | 'analysis' | 'commentary' | 'share';
 
 // ── Cricbuzz-style live header (scorer view) ──────────────
 function ScorerHeader({ match, scorecard }: { match: any; scorecard: any }) {
@@ -220,8 +225,9 @@ export default function ScoringPage() {
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState('');
   const [activeTab,  setActiveTab]  = useState<Tab>('score');
-  const [copied,     setCopied]     = useState(false);
   const [showResult, setShowResult] = useState(false);
+  const [following,  setFollowing]  = useState(false);
+  const [pushState,  setPushState]  = useState<'idle' | 'loading' | 'on' | 'unsupported'>('idle');
 
   const fetchMatch = useCallback(async () => {
     try {
@@ -235,6 +241,7 @@ export default function ScoringPage() {
 
   useEffect(() => { fetchMatch(); }, [fetchMatch]);
 
+  // Live polling — only while match is live
   useEffect(() => {
     if (!matchData || matchData.match?.status === 'completed') return;
     const t = setInterval(fetchMatch, 4000);
@@ -246,18 +253,30 @@ export default function ScoringPage() {
     if (result.matchStatus === 'completed') setShowResult(true);
   };
 
-  const handleCopy = async () => {
-    const url = matchData?.match?.shareUrl ?? window.location.href;
-    await navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
-  };
-
   const handleStartInnings2 = async () => {
     await fetchMatch();
     setActiveTab('score');
   };
 
+  const handleToggleVisibility = async () => {
+    const newVis = matchData?.match?.visibility === 'public' ? 'private' : 'public';
+    await fetch(`/api/match/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visibility: newVis }),
+    });
+    fetchMatch();
+  };
+
+  const handleFollow = async () => {
+    if (!('PushManager' in window)) { setPushState('unsupported'); return; }
+    if (pushState === 'on') return;
+    setPushState('loading');
+    const ok = await subscribeToPush(id);
+    setPushState(ok ? 'on' : 'idle');
+  };
+
+  // ── Loading / error states ────────────────────────────
   if (loading) return (
     <AppShell>
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -285,10 +304,9 @@ export default function ScoringPage() {
   const innings        = currentInnings?.innings;
   const isLive         = match?.status === 'live';
   const isBreak        = match?.status === 'innings_break';
-  const isCompleted    = match?.status === 'completed';
-  const shareUrl       = match?.shareUrl ?? '';
   const allowSingleBat = match?.settings?.allowSinglePlayerBat ?? false;
 
+  // ── Full-screen states ────────────────────────────────
   if (showResult && match?.result) {
     return (
       <AppShell>
@@ -313,15 +331,29 @@ export default function ScoringPage() {
     );
   }
 
+  // ── Tab definitions ───────────────────────────────────
+  // Score tab only visible while live; Analysis tab only when balls have been bowled
+  const hasBalls  = scorecards?.some((sc: any) => sc.innings?.totalBalls > 0);
+  const tabs: { id: Tab; label: string; show: boolean }[] = [
+    { id: 'score',       label: '🏏 Score',      show: isLive      },
+    { id: 'scorecard',   label: '📋 Scorecard',  show: true        },
+    { id: 'analysis',    label: '📊 Analysis',   show: !!hasBalls  },
+    { id: 'commentary',  label: '💬 Commentary', show: !!hasBalls  },
+    { id: 'share',       label: '📤 Share',      show: true        },
+  ];
+  const visibleTabs = tabs.filter(t => t.show);
+
   return (
     <AppShell>
       <div className="max-w-3xl mx-auto px-0 sm:px-4 py-4 sm:py-6">
 
+        {/* Cricbuzz live header */}
         {isLive && innings && (
           <ScorerHeader match={match} scorecard={currentInnings} />
         )}
 
-        {isCompleted && match?.result && (
+        {/* Completed result banner */}
+        {match?.status === 'completed' && match?.result && (
           <div className="card mx-4 sm:mx-0 mb-4 p-4 bg-brand-500/5 border-brand-500/25 text-center">
             <p className="text-2xl mb-1">🏆</p>
             <p className="font-display font-bold text-brand-400 text-lg">{match.result.summary}</p>
@@ -331,35 +363,64 @@ export default function ScoringPage() {
           </div>
         )}
 
+        {/* Meta row */}
         <div className="flex items-center justify-between px-4 sm:px-0 mb-4">
           <p className="text-slate-500 text-xs">
             {match?.totalOvers} overs · {match?.visibility === 'private' ? '🔒 Private' : '🌍 Public'}
           </p>
-          <button onClick={() => setActiveTab('share')}
-            className="btn-ghost flex items-center gap-1.5 text-xs">
-            <Share2 size={13} /> Share
-          </button>
-        </div>
-
-        <div className="flex gap-1 mx-4 sm:mx-0 mb-4 p-1 bg-pitch-card rounded-xl border border-pitch-border">
-          {([
-            { id: 'score',     label: '🏏 Score Now', show: isLive },
-            { id: 'scorecard', label: '📋 Scorecard', show: true   },
-            { id: 'share',     label: '📤 Share',      show: true   },
-          ] as const).filter(t => t.show).map(t => (
-            <button key={t.id} onClick={() => setActiveTab(t.id)}
-              className={cn(
-                'flex-1 py-2 rounded-lg text-sm font-display font-semibold transition-all',
-                activeTab === t.id ? 'bg-brand-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
-              )}>
-              {t.label}
+          <div className="flex items-center gap-2">
+            {/* Follow button — only while live, shows push opt-in */}
+            {isLive && pushState !== 'unsupported' && (
+              <button
+                onClick={handleFollow}
+                disabled={pushState === 'loading' || pushState === 'on'}
+                className={cn(
+                  'flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-all',
+                  pushState === 'on'
+                    ? 'bg-brand-500/15 border-brand-500/30 text-brand-400 cursor-default'
+                    : 'bg-pitch-card border-pitch-border text-slate-400 hover:text-white hover:border-brand-500/40',
+                )}
+              >
+                {pushState === 'loading'
+                  ? <Loader2 size={12} className="animate-spin" />
+                  : pushState === 'on'
+                  ? <><BellOff size={12} /> Following</>
+                  : <><Bell size={12} /> Follow</>
+                }
+              </button>
+            )}
+            <button onClick={() => setActiveTab('share')}
+              className="btn-ghost flex items-center gap-1.5 text-xs">
+              <Share2 size={13} /> Share
             </button>
-          ))}
+          </div>
         </div>
 
+        {/* ── Tab bar ────────────────────────────────────── */}
+        {/* Scrollable on mobile so all 5 tabs fit without wrapping */}
+        <div className="mx-4 sm:mx-0 mb-4 overflow-x-auto">
+          <div className="flex gap-1 p-1 bg-pitch-card rounded-xl border border-pitch-border min-w-max sm:min-w-0">
+            {visibleTabs.map(t => (
+              <button
+                key={t.id}
+                onClick={() => setActiveTab(t.id)}
+                className={cn(
+                  'px-3 py-2 rounded-lg text-xs sm:text-sm font-display font-semibold transition-all whitespace-nowrap',
+                  activeTab === t.id
+                    ? 'bg-brand-500 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Tab content ────────────────────────────────── */}
         <div className="px-4 sm:px-0">
 
-          {/* ── SCORE TAB ── */}
+          {/* SCORE TAB */}
           {activeTab === 'score' && innings && (
             <ScoringPanel
               matchId={id}
@@ -376,7 +437,6 @@ export default function ScoringPage() {
               isQuickMatch={isQuickMatch}
             />
           )}
-
           {activeTab === 'score' && !innings && isLive && (
             <div className="card p-8 text-center">
               <Loader2 size={24} className="animate-spin text-brand-400 mx-auto mb-3" />
@@ -384,7 +444,7 @@ export default function ScoringPage() {
             </div>
           )}
 
-          {/* ── SCORECARD TAB ── */}
+          {/* SCORECARD TAB */}
           {activeTab === 'scorecard' && (
             <div className="space-y-4">
               {scorecards?.length > 0
@@ -400,66 +460,82 @@ export default function ScoringPage() {
             </div>
           )}
 
-          {/* ── SHARE TAB ── */}
-          {activeTab === 'share' && (
-            <div className="card p-6 space-y-4">
-              <div className="flex items-center gap-2">
-                <Share2 size={18} className="text-brand-400" />
-                <h3 className="font-display font-bold text-white">Share Match</h3>
-              </div>
-              <p className="text-sm text-slate-400">
-                {match?.visibility === 'private'
-                  ? 'Share this private link — only people with it can view.'
-                  : 'This match is public and listed on the matches page.'}
-              </p>
-              <div className="flex gap-2">
-                <input readOnly value={shareUrl} className="input-field text-xs flex-1"
-                  onClick={e => (e.target as HTMLInputElement).select()} />
-                <button onClick={handleCopy}
-                  className={cn(
-                    'px-4 py-2.5 rounded-xl text-sm font-semibold transition-all flex-shrink-0',
-                    copied ? 'bg-brand-500/20 text-brand-400 border border-brand-500/30' : 'btn-primary'
-                  )}>
-                  {copied ? '✓ Copied!' : 'Copy'}
-                </button>
-              </div>
+          {/* ANALYSIS TAB */}
+          {activeTab === 'analysis' && (
+            <div className="space-y-4">
+              {scorecards?.map((sc: any) => {
+                const innLabel = sc.innings.inningsNumber === 1
+                  ? (sc.innings.battingTeam === 'teamA' ? match.teamA.name : match.teamB.name)
+                  : (sc.innings.battingTeam === 'teamA' ? match.teamA.name : match.teamB.name);
 
-              <div className="flex items-center justify-between pt-2 border-t border-pitch-border">
-                <div>
-                  <p className="text-sm font-semibold text-white">Visibility</p>
-                  <p className="text-xs text-slate-500">
-                    {match?.visibility === 'public' ? 'Listed publicly' : 'Share link only'}
-                  </p>
-                </div>
-                <button
-                  onClick={async () => {
-                    const newVis = match?.visibility === 'public' ? 'private' : 'public';
-                    await fetch(`/api/match/${id}`, {
-                      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ visibility: newVis }),
-                    });
-                    fetchMatch();
-                  }}
-                  className={cn(
-                    'px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all',
-                    match?.visibility === 'public'
-                      ? 'border-score-wicket/30 text-score-wicket hover:bg-score-wicket/10'
-                      : 'border-brand-500/30 text-brand-400 hover:bg-brand-500/10'
-                  )}>
-                  Make {match?.visibility === 'public' ? 'Private' : 'Public'}
-                </button>
-              </div>
+                return (
+                  <div key={sc.innings._id} className="card p-4 space-y-5">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      Innings {sc.innings.inningsNumber} — {innLabel}
+                    </p>
 
-              {isLive && (
-                <div className="pt-2 border-t border-pitch-border">
-                  <button onClick={() => setActiveTab('score')}
-                    className="btn-secondary w-full flex items-center justify-center gap-2 text-sm">
-                    <RotateCcw size={14} /> Back to Scoring
-                  </button>
-                </div>
-              )}
+                    {/* Over-by-over bar chart */}
+                    <OverAnalysis
+                      inningsId={sc.innings._id}
+                      playerMap={playerMap}
+                      totalOvers={match.totalOvers}
+                    />
+
+                    {/* Partnership bars — computed from battingScorecard fall-of-wickets */}
+                    {sc.fallOfWickets?.length > 0 && (() => {
+                      // Build partnerships from fall of wickets data
+                      const fow = sc.fallOfWickets;
+                      const partnerships = fow.map((f: any, i: number) => {
+                        const prevRuns = i === 0 ? 0 : fow[i - 1].runs;
+                        // Find the two batsmen involved — look at batting scorecard
+                        const dismissed = sc.battingScorecard.find(
+                          (b: any) => b.player?.name === f.name
+                        );
+                        const partner   = sc.battingScorecard.find(
+                          (b: any) => b.player?.name !== f.name && !b.dismissed && b.balls > 0
+                        );
+                        return {
+                          striker:    dismissed?.player?._id ?? f.name,
+                          nonStriker: partner?.player?._id   ?? 'Unknown',
+                          runs:       f.runs - prevRuns,
+                          balls:      0, // balls not tracked per partnership yet
+                        };
+                      });
+
+                      return (
+                        <PartnershipTracker
+                          partnerships={partnerships}
+                          playerMap={playerMap}
+                        />
+                      );
+                    })()}
+                  </div>
+                );
+              })}
             </div>
           )}
+
+          {/* COMMENTARY TAB */}
+          {activeTab === 'commentary' && (
+            <div className="card p-4">
+              <CommentaryFeed
+                matchId={id}
+                token={token}
+                isLive={isLive}
+              />
+            </div>
+          )}
+
+          {/* SHARE TAB — full ShareSheet component */}
+          {activeTab === 'share' && (
+            <ShareSheet
+              matchId={id}
+              token={token}
+              visibility={match?.visibility ?? 'private'}
+              onToggleVisibility={handleToggleVisibility}
+            />
+          )}
+
         </div>
       </div>
     </AppShell>

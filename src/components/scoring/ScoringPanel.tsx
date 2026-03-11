@@ -52,34 +52,46 @@ const DISMISSALS = [
   { val: 'retired',    label: 'Retired Hurt',  needsFielder: false },
 ];
 
-// ── Player search input — searches existing profiles, or type new name ──
-// Used in Quick Match modals — same UX as full match player adding
+// ── Match player entry — for matchPlayers[] memory ──────────
+interface MatchPlayer {
+  name:      string;
+  id?:       string;   // DB player ID if linked to a profile
+  isClaimed?: boolean;
+}
+
+// ── Player search input — matchPlayers FIRST, then DB profiles, then custom ──
+// Priority order per master prompt:
+//   1. matchPlayers (already in this match)
+//   2. ScoreXI player profiles (DB search)
+//   3. Allow custom typed player
 function QMPlayerInput({
-  label, value, onChange, placeholder, autoFocus,
+  label, value, onChange, placeholder, autoFocus, matchPlayers = [],
 }: {
-  label:       string;
-  value:       string;
-  onChange:    (name: string, existingId?: string) => void;
-  placeholder: string;
-  autoFocus?:  boolean;
+  label:         string;
+  value:         string;
+  onChange:      (name: string, existingId?: string) => void;
+  placeholder:   string;
+  autoFocus?:    boolean;
+  matchPlayers?: MatchPlayer[];   // ← players already seen in this match
 }) {
-  const [query,    setQuery]    = useState(value);
-  const [results,  setResults]  = useState<any[]>([]);
-  const [loading,  setLoading]  = useState(false);
-  const [showDrop, setShowDrop] = useState(false);
+  const [query,     setQuery]     = useState(value);
+  const [dbResults, setDbResults] = useState<any[]>([]);
+  const [loading,   setLoading]   = useState(false);
+  const [showDrop,  setShowDrop]  = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropRef  = useRef<HTMLDivElement>(null);
 
   useEffect(() => { if (!value) setQuery(''); }, [value]);
 
+  // Search DB profiles (debounced)
   useEffect(() => {
-    if (query.length < 2) { setResults([]); return; }
+    if (query.length < 2) { setDbResults([]); return; }
     const t = setTimeout(async () => {
       setLoading(true);
       try {
         const res  = await fetch(`/api/players?q=${encodeURIComponent(query)}`);
         const json = await res.json();
-        setResults(json.data?.players ?? []);
+        setDbResults(json.data?.players ?? []);
       } finally { setLoading(false); }
     }, 300);
     return () => clearTimeout(t);
@@ -94,14 +106,41 @@ function QMPlayerInput({
     return () => document.removeEventListener('mousedown', h);
   }, []);
 
-  const select = (p: any) => {
-    setQuery(p.name); onChange(p.name, p._id);
-    setResults([]); setShowDrop(false);
+  // Priority 1: matchPlayers filtered by query
+  const matchMatches = query.length >= 1
+    ? matchPlayers.filter(mp =>
+        mp.name.toLowerCase().includes(query.toLowerCase())
+      )
+    : matchPlayers;
+
+  // Priority 2: DB results that are NOT already in matchPlayers (deduplicate)
+  const matchPlayerIds = new Set(matchPlayers.map(mp => mp.id).filter(Boolean));
+  const matchPlayerNames = new Set(matchPlayers.map(mp => mp.name.toLowerCase()));
+  const dbFiltered = dbResults.filter(
+    dp => !matchPlayerIds.has(dp._id) && !matchPlayerNames.has(dp.name.toLowerCase())
+  );
+
+  const selectMatchPlayer = (mp: MatchPlayer) => {
+    setQuery(mp.name);
+    onChange(mp.name, mp.id);
+    setShowDrop(false);
   };
+
+  const selectDbPlayer = (dp: any) => {
+    setQuery(dp.name);
+    onChange(dp.name, dp._id);
+    setDbResults([]);
+    setShowDrop(false);
+  };
+
   const addNew = () => {
     if (!query.trim()) return;
-    onChange(query.trim()); setResults([]); setShowDrop(false);
+    onChange(query.trim());
+    setDbResults([]);
+    setShowDrop(false);
   };
+
+  const hasResults = matchMatches.length > 0 || dbFiltered.length > 0;
 
   return (
     <div>
@@ -126,41 +165,84 @@ function QMPlayerInput({
           maxLength={40}
         />
       </div>
-      {showDrop && query.length >= 2 && (
+      {showDrop && query.length >= 1 && (
         <div ref={dropRef}
-          className="absolute z-50 left-0 right-0 mt-1 card border-pitch-border shadow-xl overflow-hidden">
+          className="absolute z-50 left-0 right-0 mt-1 card border-pitch-border shadow-xl overflow-hidden max-h-64 overflow-y-auto">
+
+          {/* ── Priority 1: Match players ── */}
+          {matchMatches.length > 0 && (
+            <>
+              <p className="px-3 pt-2 pb-1 text-[9px] font-bold text-slate-600 uppercase tracking-widest">
+                In this match
+              </p>
+              {matchMatches.map((mp, i) => (
+                <button key={`mp-${i}`} type="button" onClick={() => selectMatchPlayer(mp)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-white/5
+                             text-left border-b border-pitch-border/30 last:border-0 transition-colors">
+                  <div className="w-6 h-6 bg-brand-500/20 rounded-full flex items-center justify-center
+                                  text-[11px] font-bold text-brand-400 flex-shrink-0">
+                    {mp.name[0].toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0 flex items-center gap-1.5">
+                    <span className="text-sm text-white">{mp.name}</span>
+                    {mp.isClaimed && <UserCheck size={10} className="text-brand-400" />}
+                  </div>
+                  <span className="text-[9px] text-slate-600">this match</span>
+                </button>
+              ))}
+            </>
+          )}
+
+          {/* ── Priority 2: DB profiles ── */}
           {loading ? (
             <div className="flex items-center gap-2 px-3 py-2.5 text-slate-500 text-sm">
               <Loader2 size={13} className="animate-spin" /> Searching...
             </div>
-          ) : (
+          ) : dbFiltered.length > 0 && (
             <>
-              {results.map((p: any) => (
-                <button key={p._id} type="button" onClick={() => select(p)}
+              <p className="px-3 pt-2 pb-1 text-[9px] font-bold text-slate-600 uppercase tracking-widest">
+                ScoreXI profiles
+              </p>
+              {dbFiltered.map((dp: any) => (
+                <button key={dp._id} type="button" onClick={() => selectDbPlayer(dp)}
                   className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-white/5
-                             text-left border-b border-pitch-border/50 last:border-0 transition-colors">
+                             text-left border-b border-pitch-border/30 last:border-0 transition-colors">
                   <div className="w-6 h-6 bg-pitch-border rounded-full flex items-center justify-center
                                   text-[11px] font-bold text-slate-400 flex-shrink-0">
-                    {p.name[0].toUpperCase()}
+                    {dp.name[0].toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1">
-                      <span className="text-sm text-white">{p.name}</span>
-                      {p.isClaimed && <UserCheck size={10} className="text-brand-400" />}
+                      <span className="text-sm text-white">{dp.name}</span>
+                      {dp.isClaimed && <UserCheck size={10} className="text-brand-400" />}
                     </div>
-                    {p.username && <span className="text-[10px] text-slate-500">@{p.username}</span>}
+                    {dp.username && <span className="text-[10px] text-slate-500">@{dp.username}</span>}
                   </div>
-                  {p.stats && <span className="text-[10px] text-slate-500">{p.stats.totalRuns}R</span>}
+                  {dp.stats && <span className="text-[10px] text-slate-500">{dp.stats.totalRuns}R</span>}
                 </button>
               ))}
-              <button type="button" onClick={addNew}
-                className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-brand-500/5 text-left transition-colors">
-                <div className="w-6 h-6 bg-brand-500/20 rounded-full flex items-center justify-center flex-shrink-0">
-                  <Plus size={12} className="text-brand-400" />
-                </div>
-                <span className="text-sm text-brand-400">Add &ldquo;{query}&rdquo; as new player</span>
-              </button>
             </>
+          )}
+
+          {/* ── Priority 3: Add as new custom player ── */}
+          {query.trim() && (
+            <button type="button" onClick={addNew}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-brand-500/5
+                         text-left border-t border-pitch-border/30 transition-colors">
+              <div className="w-6 h-6 bg-brand-500/20 rounded-full flex items-center justify-center flex-shrink-0">
+                <Plus size={12} className="text-brand-400" />
+              </div>
+              <span className="text-sm text-brand-400">
+                {hasResults ? `Add "${query}" as new player` : `Add "${query}"`}
+              </span>
+            </button>
+          )}
+
+          {/* Empty state */}
+          {!loading && !hasResults && !query.trim() && (
+            <div className="px-3 py-2.5 text-slate-500 text-sm text-center">
+              Type a name to search
+            </div>
           )}
         </div>
       )}
@@ -193,6 +275,30 @@ export default function ScoringPanel({
 
   const setupShownRef = useRef(false);
 
+  // ── matchPlayers: dynamic list of all players seen in this match ─────────
+  // Priority 1 source for QMPlayerInput suggestions.
+  // Seeded from playerMap on mount, updated whenever a player is named/scored.
+  const [matchPlayers, setMatchPlayers] = useState<MatchPlayer[]>(() => {
+    return Object.values(playerMap)
+      .filter((pl: any) => pl.name && !/\s\d+$/.test(pl.name))
+      .map((pl: any) => ({
+        name:      pl.name,
+        id:        pl._id?.toString(),
+        isClaimed: !!pl.isClaimed,
+      }));
+  });
+
+  const addToMatchPlayers = useCallback((name: string, id?: string, isClaimed?: boolean) => {
+    if (!name?.trim()) return;
+    setMatchPlayers(prev => {
+      const alreadyIn = prev.some(mp =>
+        mp.name.toLowerCase() === name.toLowerCase() || (id && mp.id === id)
+      );
+      if (alreadyIn) return prev;
+      return [{ name: name.trim(), id, isClaimed }, ...prev];
+    });
+  }, []);
+
   // ── Quick Match player-search state ─────────────────────
   // Setup modal
   const [qmStriker,    setQmStriker]    = useState({ name: '', existingId: '' });
@@ -200,6 +306,9 @@ export default function ScoringPanel({
   const [qmBowler,     setQmBowler]     = useState({ name: '', existingId: '' });
   // Wicket modal
   const [qmNewBatsman, setQmNewBatsman] = useState({ name: '', existingId: '' });
+  // Innings 2 quick match opener selection (ID-based, since players already named)
+  const [inn2StrikerId,    setInn2StrikerId]    = useState('');
+  const [inn2NonStrikerId, setInn2NonStrikerId] = useState('');
   // New bowler modal
   const [qmNewBowlerName,  setQmNewBowlerName]  = useState('');
   const [qmNewBowlerExId,  setQmNewBowlerExId]  = useState('');
@@ -373,6 +482,7 @@ export default function ScoringPanel({
         setRenaming(true);
         await renamePlayer(nextSlot, qmNewBatsman.name.trim(), qmNewBatsman.existingId || undefined);
         setRenaming(false);
+        addToMatchPlayers(qmNewBatsman.name, qmNewBatsman.existingId || undefined);
       }
       batsmanToSend = nextSlot;
     }
@@ -414,42 +524,147 @@ export default function ScoringPanel({
   // ═══════════════════════════════════════════════════════════
   if (modal === 'setup') {
 
-    // ── QUICK MATCH: player-search inputs ─────────────────
+    // ── QUICK MATCH ────────────────────────────────────────
     if (isQuickMatch) {
       const strikerSlot    = battingTeamIds[0]  ?? '';
       const nonStrikerSlot = battingTeamIds[1]  ?? '';
       const bowlerSlot     = bowlingTeamIds[0]  ?? '';
 
-      const namesOk = qmStriker.name.trim().length > 0
-        && qmNonStriker.name.trim().length > 0
-        && qmBowler.name.trim().length > 0
-        && (allowSinglePlayerBat ||
-            qmStriker.name.trim().toLowerCase() !== qmNonStriker.name.trim().toLowerCase());
+      // In innings 2, the batting team was the bowling team in innings 1.
+      // Any of their players who already bowled have real names — offer
+      // them as tap-to-select buttons. Unnamed slots still get a text input.
+      const isInnings2 = innings.inningsNumber === 2;
+
+      // Named batsmen available for innings 2 (have a real name = not default "TeamName N")
+      // We detect "real name" = player has a name that doesn't match the placeholder pattern
+      const namedBatters = isInnings2
+        ? battingTeamIds.filter(id => {
+            const name = p(id).name ?? '';
+            // A named player has a name that isn't just "TeamName N"
+            return name && !/\s\d+$/.test(name);
+          })
+        : [];
+
+      // Striker is valid: tapped a real player (not __typed__) OR typed a name
+      const strikerOk2  = (inn2StrikerId  !== '' && inn2StrikerId  !== '__typed__')
+                        || qmStriker.name.trim().length > 0;
+      // Non-striker: same logic, AND must differ from striker
+      const nonStrikerOk2 = allowSinglePlayerBat
+        || ((inn2NonStrikerId !== '' && inn2NonStrikerId !== '__typed__' && inn2NonStrikerId !== inn2StrikerId)
+            || (qmNonStriker.name.trim().length > 0
+                && qmNonStriker.name.trim().toLowerCase() !== qmStriker.name.trim().toLowerCase()));
+      // Bowler: tapped (existingId) OR typed a name
+      const bowlerOk = !!(qmBowler.existingId || qmBowler.name.trim());
+
+      const namesOk = isInnings2
+        ? (strikerOk2 && nonStrikerOk2 && bowlerOk)
+        : (qmStriker.name.trim().length > 0
+           && (allowSinglePlayerBat || qmNonStriker.name.trim().length > 0)
+           && qmBowler.name.trim().length > 0
+           && (allowSinglePlayerBat ||
+               qmStriker.name.trim().toLowerCase() !== qmNonStriker.name.trim().toLowerCase()));
 
       const handleQmStart = async () => {
         if (!namesOk) return;
         setRenaming(true);
         try {
-          await Promise.all([
-            renamePlayer(strikerSlot,    qmStriker.name,    qmStriker.existingId    || undefined),
-            renamePlayer(nonStrikerSlot, qmNonStriker.name, qmNonStriker.existingId || undefined),
-            renamePlayer(bowlerSlot,     qmBowler.name,     qmBowler.existingId     || undefined),
-          ]);
-          setBall({ strikerId: strikerSlot, nonStrikerId: nonStrikerSlot, bowlerId: bowlerSlot });
+          if (isInnings2) {
+            // Resolve striker ID: either tapped (real ID) or typed (rename first free slot)
+            let finalStrikerId = inn2StrikerId !== '__typed__' ? inn2StrikerId : '';
+            if (inn2StrikerId === '__typed__' && qmStriker.name.trim()) {
+              const freeSlot = battingTeamIds.find(id => {
+                const nm = p(id).name ?? '';
+                return !nm || /\s\d+$/.test(nm);
+              }) ?? strikerSlot;
+              await renamePlayer(freeSlot, qmStriker.name, qmStriker.existingId || undefined);
+              finalStrikerId = freeSlot;
+            }
+
+            // Resolve non-striker ID: either tapped or typed
+            let finalNonStrikerId = inn2NonStrikerId !== '__typed__' ? inn2NonStrikerId : '';
+            if (inn2NonStrikerId === '__typed__' && qmNonStriker.name.trim()) {
+              const freeSlot = battingTeamIds.find(id => {
+                const nm = p(id).name ?? '';
+                return id !== finalStrikerId && (!nm || /\s\d+$/.test(nm));
+              }) ?? nonStrikerSlot;
+              await renamePlayer(freeSlot, qmNonStriker.name, qmNonStriker.existingId || undefined);
+              finalNonStrikerId = freeSlot;
+            }
+
+            // Resolve bowler: tapped (existingId) or typed (rename free slot)
+            let finalBowlerId = qmBowler.existingId || '';
+            if (!qmBowler.existingId && qmBowler.name.trim()) {
+              const bowlerName  = p(bowlerSlot).name ?? '';
+              const bowlerNamed = bowlerName && !/\s\d+$/.test(bowlerName);
+              if (!bowlerNamed) {
+                await renamePlayer(bowlerSlot, qmBowler.name, undefined);
+              }
+              finalBowlerId = bowlerSlot;
+            }
+
+            setBall({
+              strikerId:    finalStrikerId    || strikerSlot,
+              nonStrikerId: finalNonStrikerId || nonStrikerSlot,
+              bowlerId:     finalBowlerId     || bowlerSlot,
+            });
+          } else {
+            // Innings 1 — rename all three slots
+            await Promise.all([
+              renamePlayer(strikerSlot,    qmStriker.name,    qmStriker.existingId    || undefined),
+              renamePlayer(nonStrikerSlot, qmNonStriker.name, qmNonStriker.existingId || undefined),
+              renamePlayer(bowlerSlot,     qmBowler.name,     qmBowler.existingId     || undefined),
+            ]);
+            setBall({ strikerId: strikerSlot, nonStrikerId: nonStrikerSlot, bowlerId: bowlerSlot });
+          }
         } finally { setRenaming(false); }
+        // ── Update matchPlayers memory ────────────────────
+        if (isInnings2) {
+          // Striker & non-striker already have names from innings 1 — they're in playerMap
+          // Bowler might be new
+          if (qmBowler.name.trim()) addToMatchPlayers(qmBowler.name, qmBowler.existingId || undefined);
+        } else {
+          addToMatchPlayers(qmStriker.name,    qmStriker.existingId    || undefined);
+          addToMatchPlayers(qmNonStriker.name, qmNonStriker.existingId || undefined);
+          addToMatchPlayers(qmBowler.name,     qmBowler.existingId     || undefined);
+        }
         setModal(null);
       };
+
+      // ── Helper: player tap button for innings 2 ──────────
+      const PlayerTapButton = ({
+        id, selected, disabled, onSelect, label,
+      }: { id: string; selected: boolean; disabled?: boolean; onSelect: () => void; label?: string }) => (
+        <button
+          onClick={disabled ? undefined : onSelect}
+          className={cn(
+            'w-full flex items-center justify-between px-4 py-3 rounded-xl border',
+            'font-semibold text-sm transition-all',
+            disabled
+              ? 'border-pitch-border/30 text-slate-600 opacity-40 cursor-not-allowed'
+              : selected
+                ? 'bg-brand-500/20 border-brand-500 text-brand-400'
+                : 'border-pitch-border text-slate-200 hover:border-brand-500/50 hover:bg-brand-500/5'
+          )}
+        >
+          <span>{p(id).name}</span>
+          {disabled && <span className="text-slate-600 text-xs">selected</span>}
+          {!disabled && label && <span className="text-[10px] text-slate-500">{label}</span>}
+          {!disabled && selected && <span className="text-brand-400 text-xs">✓</span>}
+        </button>
+      );
 
       return (
         <div className="card p-5 space-y-4 animate-fade-in">
           <div>
             <h3 className="font-display font-bold text-white text-lg mb-0.5">
-              {innings.inningsNumber === 1 ? 'Start Match' : 'Start Innings 2'}
+              {isInnings2 ? 'Start Innings 2' : 'Start Match'}
             </h3>
-            <p className="text-slate-400 text-sm">Search or type each player's name</p>
+            <p className="text-slate-400 text-sm">
+              {isInnings2 ? 'Select your openers and opening bowler' : 'Search or type each player\'s name'}
+            </p>
           </div>
 
-          {innings.inningsNumber === 2 && innings.targetRuns && (
+          {isInnings2 && innings.targetRuns && (
             <div className="bg-brand-500/10 border border-brand-500/25 rounded-xl p-3 text-center">
               <p className="text-slate-400 text-xs mb-0.5">Target</p>
               <p className="font-display font-bold text-3xl text-white">{innings.targetRuns}</p>
@@ -457,44 +672,158 @@ export default function ScoringPanel({
             </div>
           )}
 
-          <div className="relative">
-            <QMPlayerInput
-              label="Striker (facing first ball)"
-              value={qmStriker.name}
-              onChange={(name, existingId) => setQmStriker({ name, existingId: existingId ?? '' })}
-              placeholder="Search or type name..."
-              autoFocus
-            />
-          </div>
+          {/* ── INNINGS 2: tap-to-select openers + search box always visible ── */}
+          {isInnings2 ? (
+            <>
+              {/* STRIKER — tap known players OR type a new name below */}
+              <div>
+                <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-2">
+                  Striker <span className="text-slate-600 font-normal normal-case">(facing first ball)</span>
+                </p>
+                <div className="space-y-1.5">
+                  {namedBatters.map(id => (
+                    <PlayerTapButton
+                      key={id}
+                      id={id}
+                      selected={inn2StrikerId === id}
+                      disabled={inn2NonStrikerId === id}
+                      onSelect={() => setInn2StrikerId(id)}
+                    />
+                  ))}
+                  {/* Always show search box — to find or type a name not in the list */}
+                  <QMPlayerInput
+                    label=""
+                    value={qmStriker.name}
+                    onChange={(name, existingId) => {
+                      setQmStriker({ name, existingId: existingId ?? '' });
+                      // Typing clears the tapped selection so typed name takes priority
+                      if (name) setInn2StrikerId('__typed__');
+                    }}
+                    placeholder={inn2StrikerId && inn2StrikerId !== '__typed__'
+                      ? `${p(inn2StrikerId).name} selected — or type to override`
+                      : 'Or search / type a name...'}
+                    matchPlayers={matchPlayers}
+                    autoFocus={namedBatters.length === 0}
+                  />
+                </div>
+              </div>
 
-          <div className="relative">
-            <QMPlayerInput
-              label="Non-Striker"
-              value={qmNonStriker.name}
-              onChange={(name, existingId) => setQmNonStriker({ name, existingId: existingId ?? '' })}
-              placeholder="Search or type name..."
-            />
-          </div>
+              {/* NON-STRIKER — always shown (optional if single-bat mode) */}
+              <div>
+                <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-2">
+                  Non-Striker
+                  {allowSinglePlayerBat && (
+                    <span className="text-slate-600 font-normal normal-case ml-1">(optional — single-bat mode)</span>
+                  )}
+                </p>
+                <div className="space-y-1.5">
+                  {namedBatters.map(id => (
+                    <PlayerTapButton
+                      key={id}
+                      id={id}
+                      selected={inn2NonStrikerId === id}
+                      disabled={inn2StrikerId === id}
+                      onSelect={() => setInn2NonStrikerId(id)}
+                    />
+                  ))}
+                  <QMPlayerInput
+                    label=""
+                    value={qmNonStriker.name}
+                    onChange={(name, existingId) => {
+                      setQmNonStriker({ name, existingId: existingId ?? '' });
+                      if (name) setInn2NonStrikerId('__typed__');
+                    }}
+                    placeholder={inn2NonStrikerId && inn2NonStrikerId !== '__typed__'
+                      ? `${p(inn2NonStrikerId).name} selected — or type to override`
+                      : 'Or search / type a name...'}
+                    matchPlayers={matchPlayers}
+                  />
+                </div>
+              </div>
 
-          {!allowSinglePlayerBat
-            && qmStriker.name.trim()
-            && qmNonStriker.name.trim()
-            && qmStriker.name.trim().toLowerCase() === qmNonStriker.name.trim().toLowerCase() && (
-            <div className="bg-score-wicket/10 border border-score-wicket/30 rounded-xl px-3 py-2">
-              <p className="text-score-wicket text-xs font-semibold">
-                ⚠ Striker and Non-Striker cannot be the same player
-              </p>
-            </div>
+              {/* OPENING BOWLER — tap known players OR type a new name below */}
+              <div>
+                <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-2">Opening Bowler</p>
+                {(() => {
+                  const namedBowlers2 = bowlingTeamIds.filter(id => {
+                    const nm = p(id).name ?? '';
+                    return nm && !/\s\d+$/.test(nm);
+                  });
+                  return (
+                    <div className="space-y-1.5">
+                      {namedBowlers2.map(id => (
+                        <PlayerTapButton
+                          key={id}
+                          id={id}
+                          selected={qmBowler.existingId === id}
+                          onSelect={() => {
+                            setQmBowler({ name: p(id).name, existingId: id });
+                          }}
+                        />
+                      ))}
+                      {/* Always show search box for bowler too */}
+                      <QMPlayerInput
+                        label=""
+                        value={qmBowler.existingId ? '' : qmBowler.name}
+                        onChange={(name, existingId) => {
+                          setQmBowler({ name, existingId: existingId ?? '' });
+                        }}
+                        placeholder={qmBowler.existingId
+                          ? `${qmBowler.name} selected — or type to override`
+                          : 'Or search / type a bowler name...'}
+                        matchPlayers={matchPlayers}
+                      />
+                    </div>
+                  );
+                })()}
+              </div>
+            </>
+          ) : (
+            /* ── INNINGS 1: free-text / search inputs (unchanged) ── */
+            <>
+              <div className="relative">
+                <QMPlayerInput
+                  label="Striker (facing first ball)"
+                  value={qmStriker.name}
+                  onChange={(name, existingId) => setQmStriker({ name, existingId: existingId ?? '' })}
+                  placeholder="Search or type name..."
+                  matchPlayers={matchPlayers}
+                  autoFocus
+                />
+              </div>
+
+              <div className="relative">
+                <QMPlayerInput
+                  label="Non-Striker"
+                  value={qmNonStriker.name}
+                  onChange={(name, existingId) => setQmNonStriker({ name, existingId: existingId ?? '' })}
+                  placeholder="Search or type name..."
+                  matchPlayers={matchPlayers}
+                />
+              </div>
+
+              {!allowSinglePlayerBat
+                && qmStriker.name.trim()
+                && qmNonStriker.name.trim()
+                && qmStriker.name.trim().toLowerCase() === qmNonStriker.name.trim().toLowerCase() && (
+                <div className="bg-score-wicket/10 border border-score-wicket/30 rounded-xl px-3 py-2">
+                  <p className="text-score-wicket text-xs font-semibold">
+                    ⚠ Striker and Non-Striker cannot be the same player
+                  </p>
+                </div>
+              )}
+
+              <div className="relative">
+                <QMPlayerInput
+                  label="Opening Bowler"
+                  value={qmBowler.name}
+                  onChange={(name, existingId) => setQmBowler({ name, existingId: existingId ?? '' })}
+                  placeholder="Search or type name..."
+                  matchPlayers={matchPlayers}
+                />
+              </div>
+            </>
           )}
-
-          <div className="relative">
-            <QMPlayerInput
-              label="Opening Bowler"
-              value={qmBowler.name}
-              onChange={(name, existingId) => setQmBowler({ name, existingId: existingId ?? '' })}
-              placeholder="Search or type name..."
-            />
-          </div>
 
           <button
             disabled={!namesOk || renaming}
@@ -733,6 +1062,7 @@ export default function ScoringPanel({
                   value={qmNewBatsman.name}
                   onChange={(name, existingId) => setQmNewBatsman({ name, existingId: existingId ?? '' })}
                   placeholder="Search or type next batsman's name"
+                  matchPlayers={matchPlayers}
                   autoFocus
                 />
               </div>
@@ -777,6 +1107,7 @@ export default function ScoringPanel({
         try {
           await renamePlayer(nextSlot, qmNewBowlerName.trim(), qmNewBowlerExId || undefined);
           setBall(b => ({ ...b, bowlerId: nextSlot }));
+          addToMatchPlayers(qmNewBowlerName.trim(), qmNewBowlerExId || undefined);
         } finally { setRenaming(false); }
         setQmNewBowlerName('');
         setQmNewBowlerExId('');
@@ -840,6 +1171,7 @@ export default function ScoringPanel({
                         setQmNewBowlerExId(existingId ?? '');
                       }}
                       placeholder="Search or type new bowler's name"
+                      matchPlayers={matchPlayers}
                       autoFocus
                     />
                   </div>

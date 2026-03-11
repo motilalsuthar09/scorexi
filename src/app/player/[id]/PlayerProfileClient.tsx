@@ -8,7 +8,7 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import {
   Loader2, AlertCircle, Shield, ArrowLeft,
   Trophy, Target, Zap, Star, TrendingUp,
-  CheckCircle, ChevronRight,
+  CheckCircle, ChevronRight, ArrowLeftRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -162,8 +162,20 @@ export default function PlayerProfileClient({ id }: Props) {
             </div>
 
             {isOwner && (
-              <Link href="/profile" className="btn-secondary py-1.5 px-3 text-xs flex-shrink-0">
-                Edit
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <Link href={`/players/compare?a=${id}`}
+                  className="btn-ghost py-1.5 px-3 text-xs flex items-center gap-1">
+                  <ArrowLeftRight size={12} /> Compare
+                </Link>
+                <Link href="/profile" className="btn-secondary py-1.5 px-3 text-xs flex-shrink-0">
+                  Edit
+                </Link>
+              </div>
+            )}
+            {!isOwner && (
+              <Link href={`/players/compare?a=${id}`}
+                className="btn-ghost py-1.5 px-3 text-xs flex items-center gap-1 flex-shrink-0">
+                <ArrowLeftRight size={12} /> Compare
               </Link>
             )}
           </div>

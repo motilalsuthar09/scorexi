@@ -1,21 +1,27 @@
-// src/app/match/[id]/MatchViewClient.tsx
+// src/app/scoring/[id]/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import AppShell      from '@/components/layout/AppShell';
-import ScorecardView from '@/components/scoring/ScorecardView';
-import Link          from 'next/link';
+import { useParams, useSearchParams } from 'next/navigation';
+import AppShell          from '@/components/layout/AppShell';
+import ScoringPanel      from '@/components/scoring/ScoringPanel';
+import ScorecardView     from '@/components/scoring/ScorecardView';
+import ShareSheet        from '@/components/share/ShareSheet';
+import CommentaryFeed    from '@/components/scoring/CommentaryFeed';
+import OverAnalysis      from '@/components/scoring/OverAnalysis';
+import PartnershipTracker from '@/components/scoring/PartnershipTracker';
+import Link              from 'next/link';
 import {
-  Loader2, AlertCircle, ArrowLeft, Share2,
-  ExternalLink, TrendingUp, Activity, CheckCircle,
+  Share2, Loader2, AlertCircle,
+  TrendingUp, Activity, ArrowRight, Trophy,
+  Play,
 } from 'lucide-react';
-import { ballsToOvers } from '@/lib/utils';
-import { cn } from '@/lib/utils';
+import { cn, ballsToOvers } from '@/lib/utils';
 
-interface Props { id: string; token: string }
+type Tab = 'score' | 'scorecard' | 'analysis' | 'commentary' | 'share';
 
-// ── Cricbuzz-style viewer header ──────────────────────────
-function LiveHeader({ match, scorecard }: { match: any; scorecard: any }) {
+// ── Cricbuzz-style live header (scorer view) ──────────────
+function ScorerHeader({ match, scorecard }: { match: any; scorecard: any }) {
   if (!scorecard) return null;
   const inn     = scorecard.innings;
   const batting = inn.battingTeam === 'teamA' ? match.teamA : match.teamB;
@@ -28,30 +34,17 @@ function LiveHeader({ match, scorecard }: { match: any; scorecard: any }) {
   const crr       = balls > 0 ? ((inn.totalRuns / balls) * 6).toFixed(2) : '0.00';
 
   const runsNeeded = inn.targetRuns ? Math.max(0, inn.targetRuns - inn.totalRuns) : null;
-  const rrr        = inn.targetRuns && ballsLeft > 0
+  const rrr = inn.targetRuns && ballsLeft > 0
     ? ((runsNeeded! / ballsLeft) * 6).toFixed(2)
     : null;
 
   const recentBalls = scorecard.recentBalls ?? [];
-  const isLive      = match.status === 'live';
 
   return (
-    <div className="bg-pitch-dark border border-pitch-border rounded-2xl overflow-hidden mb-4">
-
-      {/* Title bar */}
-      <div className="px-4 pt-3 pb-2 flex items-center justify-between border-b border-pitch-border/50">
+    <div className="bg-pitch-dark border border-pitch-border rounded-2xl overflow-hidden mb-4 mx-4 sm:mx-0">
+      <div className="px-4 pt-3 pb-2 border-b border-pitch-border/50 flex items-center justify-between">
         <div className="flex items-center gap-2 min-w-0">
-          {isLive && (
-            <span className="live-badge flex-shrink-0">
-              <span className="live-dot" /> LIVE
-            </span>
-          )}
-          {match.status === 'completed' && (
-            <span className="inline-flex items-center gap-1 text-brand-400 text-xs
-                             bg-brand-500/10 px-2 py-0.5 rounded-full border border-brand-500/20 flex-shrink-0">
-              <CheckCircle size={10} /> Full Time
-            </span>
-          )}
+          <span className="live-badge flex-shrink-0"><span className="live-dot" /> LIVE</span>
           <span className="text-slate-400 text-xs truncate">
             {match.title ?? `${match.teamA?.name} vs ${match.teamB?.name}`}
           </span>
@@ -59,55 +52,43 @@ function LiveHeader({ match, scorecard }: { match: any; scorecard: any }) {
         <span className="text-xs text-slate-500 flex-shrink-0">{match.totalOvers}ov</span>
       </div>
 
-      {/* Main score */}
       <div className="px-4 py-4">
         <div className="flex items-end justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs text-slate-500 mb-0.5 font-semibold uppercase tracking-wider truncate">
               {batting.name}
             </p>
-            <div className="flex items-baseline gap-2">
+            <div className="flex items-baseline gap-1.5">
               <span className="font-display font-black text-5xl text-white leading-none tabular">
                 {inn.totalRuns}
               </span>
               <span className="font-display font-bold text-3xl text-slate-400 leading-none">
                 /{inn.wickets}
               </span>
-              <span className="text-slate-400 text-sm leading-none ml-1">
-                ({overs})
-              </span>
+              <span className="text-slate-400 text-sm leading-none ml-1">({overs})</span>
             </div>
           </div>
 
           <div className="text-right flex-shrink-0">
-            {match.result ? (
-              <div>
-                <p className="text-brand-400 text-xs font-bold uppercase tracking-wide">Result</p>
-                <p className="text-white text-sm font-semibold">{match.result.winnerName}</p>
-                <p className="text-slate-400 text-xs">won by {match.result.margin}</p>
-              </div>
-            ) : inn.inningsNumber === 2 && inn.targetRuns ? (
+            {inn.inningsNumber === 2 && inn.targetRuns ? (
               <div>
                 <p className="text-slate-500 text-xs">Need</p>
                 <p className="font-display font-black text-3xl text-score-wide leading-none tabular">
                   {runsNeeded}
                 </p>
-                <p className="text-slate-400 text-xs">
-                  off {ballsLeft} ball{ballsLeft !== 1 ? 's' : ''}
-                </p>
+                <p className="text-slate-400 text-xs">off {ballsLeft}b</p>
               </div>
             ) : (
               <div>
                 <p className="text-slate-500 text-xs">CRR</p>
                 <p className="font-display font-bold text-2xl text-white tabular">{crr}</p>
-                <p className="text-slate-500 text-xs">{bowling.name} bowling</p>
+                <p className="text-slate-500 text-xs truncate">{bowling.name}</p>
               </div>
             )}
           </div>
         </div>
 
-        {/* Innings 2 — target + rates */}
-        {inn.inningsNumber === 2 && inn.targetRuns && !match.result && (
+        {inn.inningsNumber === 2 && inn.targetRuns && (
           <div className="mt-2.5 flex items-center gap-2 flex-wrap">
             <span className="inline-flex items-center gap-1 text-xs bg-score-wide/10
                              border border-score-wide/20 rounded-full px-2.5 py-1 text-score-wide font-semibold">
@@ -127,7 +108,6 @@ function LiveHeader({ match, scorecard }: { match: any; scorecard: any }) {
         )}
       </div>
 
-      {/* Recent balls */}
       {recentBalls.length > 0 && (
         <div className="px-4 pb-3 flex items-center gap-1.5 flex-wrap">
           <span className="text-[10px] text-slate-600 uppercase tracking-wider mr-1">This over:</span>
@@ -136,95 +116,163 @@ function LiveHeader({ match, scorecard }: { match: any; scorecard: any }) {
           ))}
         </div>
       )}
-
-      {/* Current batsmen */}
-      {scorecard.battingScorecard?.some((b: any) => !b.isOut && (b.balls > 0 || b.runs > 0)) && (
-        <div className="border-t border-pitch-border/40 px-4 py-2">
-          <p className="text-[10px] text-slate-600 uppercase tracking-wider mb-1.5">At the crease</p>
-          <div className="grid grid-cols-2 gap-x-4">
-            {scorecard.battingScorecard
-              .filter((b: any) => !b.isOut && (b.balls > 0 || b.runs > 0))
-              .slice(0, 2)
-              .map((b: any) => (
-                <div key={b.player?._id} className="flex items-center justify-between py-0.5">
-                  <div className="flex items-center gap-1 min-w-0">
-                    <span className="text-xs text-white font-semibold truncate">
-                      {b.player?.name ?? '?'}
-                    </span>
-                    {b.isStriker && <span className="text-brand-400 text-[10px]">🏏</span>}
-                  </div>
-                  <span className="text-xs font-display font-bold text-white tabular flex-shrink-0 ml-2">
-                    {b.runs}
-                    <span className="text-slate-500 font-normal">({b.balls})</span>
-                  </span>
-                </div>
-              ))}
-          </div>
-        </div>
-      )}
-
-      {/* Current bowler */}
-      {scorecard.bowlingScorecard?.length > 0 && (() => {
-        const bowler = scorecard.bowlingScorecard[scorecard.bowlingScorecard.length - 1];
-        return bowler ? (
-          <div className="border-t border-pitch-border/40 px-4 py-2 flex items-center justify-between">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider">Bowling</span>
-            <span className="text-xs text-slate-300 font-semibold">{bowler.player?.name}</span>
-            <span className="text-[10px] font-mono text-slate-400">
-              {ballsToOvers(bowler.balls)}–{bowler.runs}–{bowler.wickets}
-            </span>
-          </div>
-        ) : null;
-      })()}
-
-      {/* Live update notice */}
-      {isLive && (
-        <div className="border-t border-pitch-border/30 px-4 py-2 flex items-center justify-center gap-1.5">
-          <span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-pulse" />
-          <span className="text-[10px] text-slate-500">Auto-updating every 4 seconds</span>
-        </div>
-      )}
     </div>
   );
 }
 
-// ── Main viewer component ─────────────────────────────────
-export default function MatchViewClient({ id, token }: Props) {
-  const [data,    setData]    = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState('');
-  const [copied,  setCopied]  = useState(false);
+// ── Innings break screen ──────────────────────────────────
+function InningsBreakScreen({
+  match, scorecards, onStartInnings2,
+}: { match: any; scorecards: any[]; onStartInnings2: () => void }) {
+  const inn1     = scorecards?.[0]?.innings;
+  const batting1 = inn1?.battingTeam === 'teamA' ? match.teamA : match.teamB;
+  const batting2 = inn1?.battingTeam === 'teamA' ? match.teamB : match.teamA;
+  const target   = inn1 ? inn1.totalRuns + 1 : 0;
 
-  const fetch_ = useCallback(async () => {
+  return (
+    <div className="max-w-md mx-auto px-4 py-8 text-center">
+      <div className="card p-6 mb-5">
+        <p className="text-xs text-slate-500 uppercase tracking-wider mb-2">Innings 1 Complete</p>
+        <p className="font-display font-bold text-white text-xl mb-1">{batting1?.name}</p>
+        <div className="flex items-baseline justify-center gap-2 mb-2">
+          <span className="font-display font-black text-5xl text-white tabular">{inn1?.totalRuns}</span>
+          <span className="font-display font-bold text-3xl text-slate-400">/{inn1?.wickets}</span>
+          <span className="text-slate-400 text-sm">({ballsToOvers(inn1?.totalBalls ?? 0)}/{match.totalOvers}ov)</span>
+        </div>
+        {scorecards?.[0]?.recentBalls?.length > 0 && (
+          <div className="flex justify-center gap-1.5 flex-wrap mb-3">
+            {scorecards[0].recentBalls.slice(-6).map((b: any, i: number) => (
+              <span key={i} className={`ball-${b.type}`}>{b.value}</span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card p-6 mb-6 bg-brand-500/5 border-brand-500/30">
+        <p className="text-xs text-slate-500 uppercase tracking-wider mb-1">Innings 2 Target</p>
+        <p className="font-display font-bold text-white text-lg mb-0.5">{batting2?.name} need</p>
+        <p className="font-display font-black text-6xl text-brand-400 tabular mb-1">{target}</p>
+        <p className="text-slate-400 text-sm">to win in {match.totalOvers} overs</p>
+        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+          <div className="bg-pitch-dark rounded-xl p-2">
+            <p className="text-slate-500 mb-0.5">Required RR</p>
+            <p className="font-display font-bold text-white text-lg tabular">
+              {((target / (match.totalOvers * 6)) * 6).toFixed(2)}
+            </p>
+          </div>
+          <div className="bg-pitch-dark rounded-xl p-2">
+            <p className="text-slate-500 mb-0.5">Balls available</p>
+            <p className="font-display font-bold text-white text-lg">{match.totalOvers * 6}</p>
+          </div>
+        </div>
+      </div>
+
+      <button onClick={onStartInnings2}
+        className="btn-primary w-full flex items-center justify-center gap-2 py-4 text-lg">
+        <Play size={20} /> Start Innings 2
+      </button>
+      <p className="text-xs text-slate-600 mt-2">Tap to select opening players for Innings 2</p>
+    </div>
+  );
+}
+
+// ── Match result screen ───────────────────────────────────
+function MatchResultScreen({
+  result, match, onViewScorecard,
+}: { result: any; match: any; onViewScorecard: () => void }) {
+  return (
+    <div className="max-w-md mx-auto px-4 py-10 text-center">
+      <div className="text-6xl mb-4">🏆</div>
+      <h2 className="font-display font-black text-3xl text-white mb-2">{result.summary}</h2>
+      <p className="text-slate-400 text-sm mb-6">
+        {match.title ?? `${match.teamA?.name} vs ${match.teamB?.name}`} · {match.totalOvers} overs
+      </p>
+      <div className="card p-4 mb-6 bg-brand-500/5 border-brand-500/30">
+        <div className="flex items-center justify-center gap-3">
+          <div className="text-center">
+            <p className="text-xs text-slate-500 mb-0.5">Winner</p>
+            <p className="font-display font-bold text-xl text-brand-400">{result.winnerName}</p>
+          </div>
+          <Trophy size={20} className="text-score-wide" />
+          <div className="text-center">
+            <p className="text-xs text-slate-500 mb-0.5">Margin</p>
+            <p className="font-display font-bold text-xl text-white">{result.margin}</p>
+          </div>
+        </div>
+      </div>
+      <div className="space-y-2">
+        <button onClick={onViewScorecard}
+          className="btn-primary w-full flex items-center justify-center gap-2">
+          View Full Scorecard <ArrowRight size={16} />
+        </button>
+        <Link href="/my-matches" className="btn-secondary w-full flex items-center justify-center gap-2">
+          My Matches
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// ── Main scoring page ─────────────────────────────────────
+export default function ScoringPage() {
+  const { id }       = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+  const token        = searchParams.get('token') ?? '';
+  const isQuickMatch = searchParams.get('quick') === '1';
+
+  const [matchData,  setMatchData]  = useState<any>(null);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState('');
+  const [activeTab,  setActiveTab]  = useState<Tab>('score');
+  const [showResult, setShowResult] = useState(false);
+
+  const fetchMatch = useCallback(async () => {
     try {
-      const url  = `/api/match/${id}${token ? `?token=${token}` : ''}`;
-      const res  = await fetch(url);
+      const res  = await fetch(`/api/match/${id}${token ? `?token=${token}` : ''}`);
       const json = await res.json();
-      if (json.success) setData(json.data);
-      else setError(json.error || 'Access denied');
+      if (json.success) setMatchData(json.data);
+      else setError(json.error || 'Failed to load');
     } catch { setError('Network error'); }
     finally { setLoading(false); }
   }, [id, token]);
 
-  useEffect(() => { fetch_(); }, [fetch_]);
+  useEffect(() => { fetchMatch(); }, [fetchMatch]);
 
-  // Live polling every 4 s
+  // Live polling — only while match is live
   useEffect(() => {
-    if (!data || data.match?.status === 'completed') return;
-    const t = setInterval(fetch_, 4000);
+    if (!matchData || matchData.match?.status === 'completed') return;
+    const t = setInterval(fetchMatch, 4000);
     return () => clearInterval(t);
-  }, [data?.match?.status, fetch_]);
+  }, [matchData?.match?.status, fetchMatch]);
 
-  const copyLink = async () => {
-    await navigator.clipboard.writeText(window.location.href);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+  const handleBallSaved = async (result: any) => {
+    await fetchMatch();
+    if (result.matchStatus === 'completed') setShowResult(true);
   };
 
+  const handleStartInnings2 = async () => {
+    await fetchMatch();
+    setActiveTab('score');
+  };
+
+  const handleToggleVisibility = async () => {
+    const newVis = matchData?.match?.visibility === 'public' ? 'private' : 'public';
+    await fetch(`/api/match/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visibility: newVis }),
+    });
+    fetchMatch();
+  };
+
+  // ── Loading / error states ────────────────────────────
   if (loading) return (
     <AppShell>
       <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 size={28} className="animate-spin text-brand-400" />
+        <div className="text-center">
+          <Loader2 size={32} className="animate-spin text-brand-400 mx-auto mb-3" />
+          <p className="text-slate-400">Loading match...</p>
+        </div>
       </div>
     </AppShell>
   );
@@ -233,63 +281,228 @@ export default function MatchViewClient({ id, token }: Props) {
     <AppShell>
       <div className="max-w-md mx-auto px-4 py-16 text-center">
         <AlertCircle size={40} className="text-score-wicket mx-auto mb-3" />
-        <h2 className="font-display font-bold text-xl text-white mb-2">Can't Load Match</h2>
+        <h2 className="font-display font-bold text-xl text-white mb-2">Access Denied</h2>
         <p className="text-slate-400 text-sm mb-4">{error}</p>
-        <Link href="/" className="btn-secondary">← Back to Home</Link>
+        <Link href="/" className="btn-secondary">← Home</Link>
       </div>
     </AppShell>
   );
 
-  const { match, scorecards } = data;
-  const currentScorecard = scorecards?.[match.currentInnings - 1];
+  const { match, scorecards, playerMap } = matchData ?? {};
+  const currentInnings = scorecards?.[match?.currentInnings - 1];
+  const innings        = currentInnings?.innings;
+  const isLive         = match?.status === 'live';
+  const isBreak        = match?.status === 'innings_break';
+  const allowSingleBat = match?.settings?.allowSinglePlayerBat ?? false;
+
+  // ── Full-screen states ────────────────────────────────
+  if (showResult && match?.result) {
+    return (
+      <AppShell>
+        <MatchResultScreen
+          result={match.result}
+          match={match}
+          onViewScorecard={() => { setShowResult(false); setActiveTab('scorecard'); }}
+        />
+      </AppShell>
+    );
+  }
+
+  if (isBreak) {
+    return (
+      <AppShell>
+        <InningsBreakScreen
+          match={match}
+          scorecards={scorecards}
+          onStartInnings2={handleStartInnings2}
+        />
+      </AppShell>
+    );
+  }
+
+  // ── Tab definitions ───────────────────────────────────
+  // Score tab only visible while live; Analysis tab only when balls have been bowled
+  const hasBalls  = scorecards?.some((sc: any) => sc.innings?.totalBalls > 0);
+  const tabs: { id: Tab; label: string; show: boolean }[] = [
+    { id: 'score',       label: '🏏 Score',      show: isLive      },
+    { id: 'scorecard',   label: '📋 Scorecard',  show: true        },
+    { id: 'analysis',    label: '📊 Analysis',   show: !!hasBalls  },
+    { id: 'commentary',  label: '💬 Commentary', show: !!hasBalls  },
+    { id: 'share',       label: '📤 Share',      show: true        },
+  ];
+  const visibleTabs = tabs.filter(t => t.show);
 
   return (
     <AppShell>
-      <div className="max-w-3xl mx-auto px-4 py-5">
+      <div className="max-w-3xl mx-auto px-0 sm:px-4 py-4 sm:py-6">
 
-        {/* Back + share row */}
-        <div className="flex items-center justify-between mb-4">
-          <Link href="/matches" className="btn-ghost flex items-center gap-1.5 text-sm">
-            <ArrowLeft size={15} /> Matches
-          </Link>
-          <button
-            onClick={copyLink}
-            className={cn(
-              'btn-ghost flex items-center gap-1.5 text-sm transition-all',
-              copied && 'text-brand-400'
-            )}
-          >
-            <Share2 size={14} /> {copied ? 'Copied!' : 'Share'}
-          </button>
-        </div>
+        {/* Cricbuzz live header */}
+        {isLive && innings && (
+          <ScorerHeader match={match} scorecard={currentInnings} />
+        )}
 
-        {/* ── Cricbuzz-style live header ─────────────────── */}
-        <LiveHeader match={match} scorecard={currentScorecard} />
-
-        {/* Full result banner */}
-        {match.result && (
-          <div className="bg-brand-500/10 border border-brand-500/20 rounded-2xl px-4 py-4 mb-4 text-center">
+        {/* Completed result banner */}
+        {match?.status === 'completed' && match?.result && (
+          <div className="card mx-4 sm:mx-0 mb-4 p-4 bg-brand-500/5 border-brand-500/25 text-center">
             <p className="text-2xl mb-1">🏆</p>
             <p className="font-display font-bold text-brand-400 text-lg">{match.result.summary}</p>
+            <p className="text-slate-400 text-xs mt-1">
+              {match.title ?? `${match.teamA?.name} vs ${match.teamB?.name}`}
+            </p>
           </div>
         )}
 
-        {/* Scorecards */}
-        <div className="space-y-4">
-          {scorecards?.map((sc: any) => (
-            <ScorecardView key={sc.innings._id} scorecard={sc} match={match} />
-          ))}
+        {/* Meta row */}
+        <div className="flex items-center justify-between px-4 sm:px-0 mb-4">
+          <p className="text-slate-500 text-xs">
+            {match?.totalOvers} overs · {match?.visibility === 'private' ? '🔒 Private' : '🌍 Public'}
+          </p>
+          <button onClick={() => setActiveTab('share')}
+            className="btn-ghost flex items-center gap-1.5 text-xs">
+            <Share2 size={13} /> Share
+          </button>
         </div>
 
-        {/* Powered by */}
-        <div className="text-center mt-8 py-4">
-          <Link
-            href="/"
-            className="inline-flex items-center gap-1.5 text-slate-600 text-xs hover:text-slate-400 transition-colors"
-          >
-            <ExternalLink size={11} />
-            Scored with ScoreXI
-          </Link>
+        {/* ── Tab bar ────────────────────────────────────── */}
+        {/* Scrollable on mobile so all 5 tabs fit without wrapping */}
+        <div className="mx-4 sm:mx-0 mb-4 overflow-x-auto">
+          <div className="flex gap-1 p-1 bg-pitch-card rounded-xl border border-pitch-border min-w-max sm:min-w-0">
+            {visibleTabs.map(t => (
+              <button
+                key={t.id}
+                onClick={() => setActiveTab(t.id)}
+                className={cn(
+                  'px-3 py-2 rounded-lg text-xs sm:text-sm font-display font-semibold transition-all whitespace-nowrap',
+                  activeTab === t.id
+                    ? 'bg-brand-500 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Tab content ────────────────────────────────── */}
+        <div className="px-4 sm:px-0">
+
+          {/* SCORE TAB */}
+          {activeTab === 'score' && innings && (
+            <ScoringPanel
+              matchId={id}
+              token={token}
+              innings={innings}
+              match={match}
+              playerMap={playerMap}
+              teamAPlayers={match.teamA.playerIds}
+              teamBPlayers={match.teamB.playerIds}
+              onBallSaved={handleBallSaved}
+              bowlingScorecard={currentInnings?.bowlingScorecard ?? []}
+              battingScorecard={currentInnings?.battingScorecard ?? []}
+              allowSinglePlayerBat={allowSingleBat}
+              isQuickMatch={isQuickMatch}
+            />
+          )}
+          {activeTab === 'score' && !innings && isLive && (
+            <div className="card p-8 text-center">
+              <Loader2 size={24} className="animate-spin text-brand-400 mx-auto mb-3" />
+              <p className="text-slate-400">Setting up innings...</p>
+            </div>
+          )}
+
+          {/* SCORECARD TAB */}
+          {activeTab === 'scorecard' && (
+            <div className="space-y-4">
+              {scorecards?.length > 0
+                ? scorecards.map((sc: any) => (
+                    <ScorecardView key={sc.innings._id} scorecard={sc} match={match} />
+                  ))
+                : (
+                  <div className="card p-8 text-center">
+                    <p className="text-slate-400">No balls scored yet.</p>
+                  </div>
+                )
+              }
+            </div>
+          )}
+
+          {/* ANALYSIS TAB */}
+          {activeTab === 'analysis' && (
+            <div className="space-y-4">
+              {scorecards?.map((sc: any) => {
+                const innLabel = sc.innings.inningsNumber === 1
+                  ? (sc.innings.battingTeam === 'teamA' ? match.teamA.name : match.teamB.name)
+                  : (sc.innings.battingTeam === 'teamA' ? match.teamA.name : match.teamB.name);
+
+                return (
+                  <div key={sc.innings._id} className="card p-4 space-y-5">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      Innings {sc.innings.inningsNumber} — {innLabel}
+                    </p>
+
+                    {/* Over-by-over bar chart */}
+                    <OverAnalysis
+                      inningsId={sc.innings._id}
+                      playerMap={playerMap}
+                      totalOvers={match.totalOvers}
+                    />
+
+                    {/* Partnership bars — computed from battingScorecard fall-of-wickets */}
+                    {sc.fallOfWickets?.length > 0 && (() => {
+                      // Build partnerships from fall of wickets data
+                      const fow = sc.fallOfWickets;
+                      const partnerships = fow.map((f: any, i: number) => {
+                        const prevRuns = i === 0 ? 0 : fow[i - 1].runs;
+                        // Find the two batsmen involved — look at batting scorecard
+                        const dismissed = sc.battingScorecard.find(
+                          (b: any) => b.player?.name === f.name
+                        );
+                        const partner   = sc.battingScorecard.find(
+                          (b: any) => b.player?.name !== f.name && !b.dismissed && b.balls > 0
+                        );
+                        return {
+                          striker:    dismissed?.player?._id ?? f.name,
+                          nonStriker: partner?.player?._id   ?? 'Unknown',
+                          runs:       f.runs - prevRuns,
+                          balls:      0, // balls not tracked per partnership yet
+                        };
+                      });
+
+                      return (
+                        <PartnershipTracker
+                          partnerships={partnerships}
+                          playerMap={playerMap}
+                        />
+                      );
+                    })()}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* COMMENTARY TAB */}
+          {activeTab === 'commentary' && (
+            <div className="card p-4">
+              <CommentaryFeed
+                matchId={id}
+                token={token}
+                isLive={isLive}
+              />
+            </div>
+          )}
+
+          {/* SHARE TAB — full ShareSheet component */}
+          {activeTab === 'share' && (
+            <ShareSheet
+              matchId={id}
+              token={token}
+              visibility={match?.visibility ?? 'private'}
+              onToggleVisibility={handleToggleVisibility}
+            />
+          )}
+
         </div>
       </div>
     </AppShell>

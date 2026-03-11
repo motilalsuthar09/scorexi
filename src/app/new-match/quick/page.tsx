@@ -216,7 +216,7 @@ export default function QuickMatchPage() {
       const json = await res.json();
       if (json.success) {
         const { matchId, shareToken } = json.data;
-        saveHostedMatch(matchId, shareToken, `${form.teamAName} vs ${form.teamBName}`);
+        saveHostedMatch(matchId, shareToken, `${form.teamAName} vs ${form.teamBName}`, true);
         router.push(`/scoring/${matchId}?token=${shareToken}&quick=1`);
       } else {
         setError(json.error || 'Failed to create match');
