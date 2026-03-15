@@ -1,13 +1,4 @@
 // src/app/api/match/[id]/route.ts
-// ============================================================
-// GET   /api/match/[id]  — full match + scorecard
-// PATCH /api/match/[id]  — update status / visibility
-// DELETE /api/match/[id] — delete match, rollback player stats
-//   Auth: shareToken (host only)
-//   - Deletes: Match, all Innings, all Balls, Commentary
-//   - Rolls back: Player.stats (subtracts this match's contribution)
-//   - Deletes player profile only if: unclaimed AND this was their only match
-// ============================================================
 import { NextRequest } from 'next/server';
 import { connectDB }   from '@/lib/db';
 import Match           from '@/models/Match';
@@ -60,12 +51,41 @@ export async function GET(
       .sort({ inningsNumber: 1 })
       .lean();
 
-    const allPlayerIds = [
+    // Collect all player IDs: team rosters + any IDs stored in innings
+    // (currentStrikerId etc.) + any IDs that appear in Ball documents.
+    // This ensures renamed/linked players are always resolved correctly
+    // even when the innings still holds an old placeholder ID.
+    const teamPlayerIds = [
       ...match.teamA.playerIds,
       ...match.teamB.playerIds,
     ].map(String);
 
-    const players = await Player.find({ _id: { $in: allPlayerIds } })
+    const inningsPlayerIds = inningsArr.flatMap(inn => [
+      inn.currentStrikerId?.toString(),
+      inn.currentNonStrikerId?.toString(),
+      inn.currentBowlerId?.toString(),
+    ].filter(Boolean) as string[]);
+
+    // Also collect IDs from balls (covers linked players)
+    const allBalls = await Ball.find({ matchId: id })
+      .select('batsmanId bowlerId fielderIds dismissedPlayerId')
+      .lean();
+
+    const ballPlayerIds: string[] = [];
+    for (const b of allBalls) {
+      ballPlayerIds.push(b.batsmanId.toString());
+      ballPlayerIds.push(b.bowlerId.toString());
+      if (b.dismissedPlayerId) ballPlayerIds.push(b.dismissedPlayerId.toString());
+      for (const f of (b.fielderIds ?? [])) ballPlayerIds.push(f.toString());
+    }
+
+    const uniquePlayerIds = Array.from(new Set([
+      ...teamPlayerIds,
+      ...inningsPlayerIds,
+      ...ballPlayerIds,
+    ]));
+
+    const players = await Player.find({ _id: { $in: uniquePlayerIds } })
       .select('name username profilePic')
       .lean();
 
@@ -125,7 +145,8 @@ export async function GET(
           const bw = bowlingMap.get(bwid)!;
           bw.runs += ball.runsOffBat + ball.extras;
           if (ball.isLegalDelivery) bw.balls++;
-          if (ball.isWicket) bw.wickets++;
+          // Retired hurt is NOT a bowler's wicket
+          if (ball.isWicket && ball.dismissalType !== 'retired') bw.wickets++;
 
           if (ball.isLegalDelivery) {
             const overKey = `${bwid}:${ball.overNumber}`;
@@ -239,13 +260,6 @@ export async function PATCH(
 }
 
 // ─── DELETE /api/match/[id] ───────────────────────────────
-// Auth: shareToken passed as query param (same as scoring page)
-// Steps:
-//   1. Verify shareToken
-//   2. Aggregate each player's contribution from Ball collection
-//   3. Subtract from Player.stats (floor at 0)
-//   4. If unclaimed player was ONLY in this match → delete profile
-//   5. Delete Balls, Innings, Commentary, Match
 export async function DELETE(
   req: NextRequest,
   { params }: { params: { id: string } }
@@ -254,23 +268,23 @@ export async function DELETE(
     const { id }  = params;
     const token   = req.nextUrl.searchParams.get('token');
 
-    if (!token) return apiError('Share token required', 401);
+    const { getSession } = await import('@/lib/auth');
+    const session = getSession(req);
+    const isAdmin = session?.role === 'admin';
+
+    if (!isAdmin && !token) return apiError('Share token required', 401);
     if (!mongoose.Types.ObjectId.isValid(id)) return apiError('Invalid match ID', 400);
 
     await connectDB();
 
     const match = await Match.findById(id).lean();
     if (!match)                    return apiError('Match not found', 404);
-    if (match.shareToken !== token) return apiError('Unauthorised', 403);
+    if (!isAdmin && match.shareToken !== token) return apiError('Unauthorised', 403);
 
-    // ── All innings + balls for this match ────────────────
     const inningsArr = await Innings.find({ matchId: id }).lean();
     const inningsIds = inningsArr.map(i => i._id);
     const balls      = await Ball.find({ inningsId: { $in: inningsIds } }).lean();
 
-    // ── Aggregate per-player stats from balls ─────────────
-    // batting: runs, ballsFaced, fours, sixes, wickets (times dismissed)
-    // bowling: ballsBowled, runsConceded, wicketsTaken
     type PlayerStats = {
       runs: number; ballsFaced: number; fours: number; sixes: number;
       timesOut: number; notOut: boolean;
@@ -293,7 +307,6 @@ export async function DELETE(
       const bid  = ball.batsmanId.toString();
       const bwid = ball.bowlerId.toString();
 
-      // batting
       const bs = getOrInit(bid);
       if (ball.isLegalDelivery) bs.ballsFaced++;
       if (!ball.extraType || ball.extraType === 'no_ball') {
@@ -301,18 +314,14 @@ export async function DELETE(
         if (ball.runsOffBat === 4) bs.fours++;
         if (ball.runsOffBat === 6) bs.sixes++;
       }
-      if (ball.isWicket && ball.dismissedPlayerId?.toString() === bid) {
-        bs.timesOut++;
-      }
+      if (ball.isWicket && ball.dismissedPlayerId?.toString() === bid) bs.timesOut++;
 
-      // bowling
       const bw = getOrInit(bwid);
       if (ball.isLegalDelivery) bw.ballsBowled++;
       bw.runsConceded += ball.runsOffBat + ball.extras;
       if (ball.isWicket) bw.wicketsTaken++;
     }
 
-    // Mark who batted and wasn't dismissed (not out)
     const allMatchPlayerIds = [
       ...match.teamA.playerIds.map(String),
       ...match.teamB.playerIds.map(String),
@@ -322,8 +331,6 @@ export async function DELETE(
       if (s && s.ballsFaced > 0 && s.timesOut === 0) s.notOut = true;
     }
 
-    // ── Subtract stats from each player ───────────────────
-    // We floor at 0 to avoid negative numbers from any edge cases
     const clamp = (n: number) => Math.max(0, n);
 
     for (const [pid, s] of statsMap.entries()) {
@@ -343,12 +350,9 @@ export async function DELETE(
       await player.save();
     }
 
-    // ── Delete unclaimed orphan profiles ──────────────────
-    // An orphan = unclaimed player whose ONLY match was this one.
-    // We check by searching for their player ID in any OTHER match's playerIds.
     for (const pid of allMatchPlayerIds) {
       const player = await Player.findById(pid).lean();
-      if (!player || player.isClaimed) continue; // keep claimed profiles always
+      if (!player || player.isClaimed) continue;
 
       const otherMatch = await Match.findOne({
         _id: { $ne: match._id },
@@ -359,19 +363,16 @@ export async function DELETE(
       }).lean();
 
       if (!otherMatch) {
-        // No other match references this player — safe to delete
         await Player.findByIdAndDelete(pid);
       }
     }
 
-    // ── Delete all match data ──────────────────────────────
     await Ball.deleteMany({ inningsId: { $in: inningsIds } });
     await Innings.deleteMany({ matchId: id });
 
-    // Delete commentary if model exists
     try {
       await Commentary.deleteMany({ matchId: id });
-    } catch { /* Commentary model may not exist in all setups */ }
+    } catch {}
 
     await Match.findByIdAndDelete(id);
 

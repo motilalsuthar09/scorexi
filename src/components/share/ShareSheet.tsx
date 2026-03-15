@@ -68,7 +68,7 @@ export default function ShareSheet({ matchId, token, visibility, onToggleVisibil
           <span className="font-display font-semibold text-white text-sm">Share Match</span>
           <span className={cn(
             'ml-auto text-xs px-2 py-0.5 rounded-full border',
-            visibility === 'live' || match.status === 'live'
+            match.status === 'live'
               ? 'text-score-wicket border-score-wicket/30 bg-score-wicket/10'
               : 'text-slate-400 border-pitch-border'
           )}>

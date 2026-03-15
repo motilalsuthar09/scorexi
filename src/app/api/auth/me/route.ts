@@ -9,4 +9,5 @@ export async function GET(req: NextRequest) {
   const session = getSession(req);
   if (!session) return apiError('Not authenticated', 401);
   return apiSuccess({ user: session });
+
 }

@@ -14,9 +14,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Loader2, RotateCcw, ArrowLeftRight, ChevronDown,
-  AlertCircle, UserX, Target, Plus, Search, UserCheck,
+  AlertCircle, UserX, Target, Plus, Search, UserCheck, WifiOff,
 } from 'lucide-react';
 import { cn, ballsToOvers, economy } from '@/lib/utils';
+import { useOfflineScoring } from '@/lib/pwa';
 
 interface Props {
   matchId:               string;
@@ -27,6 +28,7 @@ interface Props {
   teamAPlayers:          string[];
   teamBPlayers:          string[];
   onBallSaved:           (result: any) => void;
+  onRefresh?:            () => void;  // called after renamePlayer so parent re-fetches playerMap
   bowlingScorecard?:     any[];
   battingScorecard?:     any[];
   allowSinglePlayerBat?: boolean;
@@ -252,7 +254,7 @@ function QMPlayerInput({
 
 export default function ScoringPanel({
   matchId, token, innings, match, playerMap,
-  teamAPlayers, teamBPlayers, onBallSaved,
+  teamAPlayers, teamBPlayers, onBallSaved, onRefresh,
   bowlingScorecard = [], battingScorecard = [],
   allowSinglePlayerBat = false,
   isQuickMatch = false,
@@ -267,13 +269,36 @@ export default function ScoringPanel({
   const [showByeRuns,    setShowByeRuns]    = useState(false);
   const [byeType,        setByeType]        = useState<'bye' | 'leg_bye' | null>(null);
 
-  const [ball, setBall] = useState<BallState>({
-    strikerId:    innings.currentStrikerId?.toString()    ?? '',
-    nonStrikerId: innings.currentNonStrikerId?.toString() ?? '',
-    bowlerId:     innings.currentBowlerId?.toString()     ?? '',
+  // ── Persist ball state so resuming a match keeps player IDs ────────────────
+  const LS_KEY = `scorexi_scoring_${matchId}`;
+
+  const [ball, setBall] = useState<BallState>(() => {
+    const ss = innings.currentStrikerId?.toString()    ?? '';
+    const ns = innings.currentNonStrikerId?.toString() ?? '';
+    const bw = innings.currentBowlerId?.toString()     ?? '';
+    // If server has valid IDs, use them
+    if (ss && bw) return { strikerId: ss, nonStrikerId: ns, bowlerId: bw };
+    // Otherwise try localStorage cache (handles page-leave-and-return)
+    try {
+      if (typeof window !== 'undefined') {
+        const saved = JSON.parse(localStorage.getItem(LS_KEY) ?? 'null');
+        if (saved?.strikerId && saved?.bowlerId) return saved;
+      }
+    } catch {}
+    return { strikerId: ss, nonStrikerId: ns, bowlerId: bw };
   });
 
+  // Persist ball state on every change
+  useEffect(() => {
+    if (ball.strikerId && ball.bowlerId) {
+      try { localStorage.setItem(LS_KEY, JSON.stringify(ball)); } catch {}
+    }
+  }, [ball, LS_KEY]);
+
   const setupShownRef = useRef(false);
+
+  // ── Offline scoring hook ──────────────────────────────────
+  const { queueBall, isOffline, queueSize, isSyncing } = useOfflineScoring();
 
   // ── matchPlayers: dynamic list of all players seen in this match ─────────
   // Priority 1 source for QMPlayerInput suggestions.
@@ -348,7 +373,14 @@ export default function ScoringPanel({
   const wicketsForAllOut = allowSinglePlayerBat ? teamSize : teamSize - 1;
   const isNearAllOut     = innings.wickets >= wicketsForAllOut - 2;
 
-  const p = (id: string) => playerMap[id] ?? { name: id ? `P-${id.slice(-4)}` : '?', _id: id };
+  // Local name overrides: applied immediately after rename before server refresh
+  const [localNameOverrides, setLocalNameOverrides] = useState<Record<string, string>>({});
+
+  const p = (id: string) => {
+    if (!id) return { name: '?', _id: id };
+    if (localNameOverrides[id]) return { name: localNameOverrides[id], _id: id };
+    return playerMap[id] ?? { name: id ? `P-${id.slice(-4)}` : '?', _id: id };
+  };
   const selectedDismissal = DISMISSALS.find(d => d.val === wicketDismissalType);
 
   const getBatStats = (id: string) => {
@@ -378,28 +410,57 @@ export default function ScoringPanel({
 
     if (!setupShownRef.current) {
       setupShownRef.current = true;
-      if (!ss || !bw) setModal('setup');
+      // Skip setup if players already have real names (not placeholder pattern)
+      // This handles page-leave-and-return — no need to re-enter names
+      const strikerName = ss ? (playerMap[ss]?.name ?? '') : '';
+      const bowlerName  = bw ? (playerMap[bw]?.name  ?? '') : '';
+      const hasNames = strikerName && !/\s\d+$/.test(strikerName)
+                    && bowlerName  && !/\s\d+$/.test(bowlerName);
+      if (!hasNames && (!ss || !bw)) setModal('setup');
     }
-  }, [innings.currentStrikerId, innings.currentNonStrikerId, innings.currentBowlerId]);
+  }, [innings.currentStrikerId, innings.currentNonStrikerId, innings.currentBowlerId, playerMap]);
 
   // ── Rename/link helper (Quick Match only) ────────────────
-  // If existingId is given, we link the slot to an existing player profile.
-  // Otherwise, just rename the placeholder.
+  // Returns the final ID to use in setBall:
+  //   • existingId (new) — when linking to a registered profile not yet in team
+  //   • slotId           — when doing a plain rename
+  // Sets localNameOverrides for BOTH ids immediately so the name displays
+  // correctly before onRefresh() re-fetches playerMap from the server.
   const renamePlayer = useCallback(async (
     slotId: string, name: string, existingId?: string
-  ) => {
-    if (!name.trim() || !slotId) return;
-    await fetch(`/api/match/${matchId}/rename-player`, {
-      method:  'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        token,
-        playerId:         slotId,
-        name:             name.trim(),
-        linkToExistingId: existingId || undefined,
-      }),
-    });
-  }, [matchId, token]);
+  ): Promise<string> => {
+    if (!name.trim() || !slotId) return slotId;
+
+    const allTeamIds = [...teamAPlayers, ...teamBPlayers];
+    // If existingId is already in the team (e.g. selected from "In this match"
+    // dropdown, or a previous call already did the swap), skip the API entirely.
+    // The original route would return 409 for this case.
+    const alreadyInTeam = !!(existingId && allTeamIds.includes(existingId));
+    const finalId = existingId && !alreadyInTeam ? existingId : slotId;
+
+    // Set name for both IDs so p() resolves correctly before server refresh
+    setLocalNameOverrides(prev => ({
+      ...prev,
+      [slotId]:  name.trim(),
+      [finalId]: name.trim(),
+    }));
+
+    if (!alreadyInTeam) {
+      // Only call the API if we actually need to rename or link
+      await fetch(`/api/match/${matchId}/rename-player`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          token,
+          playerId:         slotId,
+          name:             name.trim(),
+          linkToExistingId: existingId || undefined,
+        }),
+      });
+    }
+
+    return finalId;
+  }, [matchId, token, teamAPlayers, teamBPlayers]);
 
   // ── Core submit ──────────────────────────────────────────
   const submitBall = useCallback(async (opts: {
@@ -412,10 +473,7 @@ export default function ScoringPanel({
     }
     setSaving(true); setError('');
     try {
-      const res = await fetch(`/api/match/${matchId}/ball?token=${token}`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const json = await queueBall(matchId, token, {
           inningsId:           innings._id,
           batsmanId:           ball.strikerId,
           bowlerId:            ball.bowlerId,
@@ -427,9 +485,9 @@ export default function ScoringPanel({
           dismissedPlayerId:   opts.dismissedPlayerId ?? null,
           fielderPlayerId:     opts.fielderPlayerId   ?? null,
           newBatsmanId:        opts.newBatsmanId      ?? null,
-        }),
-      });
-      const json = await res.json();
+        });
+      // Offline — don't update UI state, just acknowledge
+      if ((json as any).offline) { setSaving(false); return; }
       if (json.success) {
         const data = json.data;
         setBall(b => ({
@@ -448,7 +506,7 @@ export default function ScoringPanel({
       }
     } catch { setError('Network error. Please retry.'); }
     finally  { setSaving(false); }
-  }, [ball, innings._id, matchId, token, onBallSaved]);
+  }, [ball, innings._id, matchId, token, onBallSaved, queueBall]);
 
   const handleRun   = (r: number) => submitBall({ runsOffBat: r, extraType: null, isWicket: false });
   const handleExtra = (type: ExtraType) => {
@@ -483,6 +541,7 @@ export default function ScoringPanel({
         await renamePlayer(nextSlot, qmNewBatsman.name.trim(), qmNewBatsman.existingId || undefined);
         setRenaming(false);
         addToMatchPlayers(qmNewBatsman.name, qmNewBatsman.existingId || undefined);
+        onRefresh?.();
       }
       batsmanToSend = nextSlot;
     }
@@ -608,13 +667,14 @@ export default function ScoringPanel({
               bowlerId:     finalBowlerId     || bowlerSlot,
             });
           } else {
-            // Innings 1 — rename all three slots
-            await Promise.all([
-              renamePlayer(strikerSlot,    qmStriker.name,    qmStriker.existingId    || undefined),
-              renamePlayer(nonStrikerSlot, qmNonStriker.name, qmNonStriker.existingId || undefined),
-              renamePlayer(bowlerSlot,     qmBowler.name,     qmBowler.existingId     || undefined),
-            ]);
-            setBall({ strikerId: strikerSlot, nonStrikerId: nonStrikerSlot, bowlerId: bowlerSlot });
+            // Innings 1 — rename sequentially (not Promise.all) so each call
+            // sees the latest team state. Use returned final IDs in setBall —
+            // if a registered player was linked, renamePlayer returns their real ID
+            // (the placeholder was deleted); using slotId would resolve to nothing.
+            const inn1Striker    = await renamePlayer(strikerSlot,    qmStriker.name,    qmStriker.existingId    || undefined);
+            const inn1NonStriker = await renamePlayer(nonStrikerSlot, qmNonStriker.name, qmNonStriker.existingId || undefined);
+            const inn1Bowler     = await renamePlayer(bowlerSlot,     qmBowler.name,     qmBowler.existingId     || undefined);
+            setBall({ strikerId: inn1Striker, nonStrikerId: inn1NonStriker, bowlerId: inn1Bowler });
           }
         } finally { setRenaming(false); }
         // ── Update matchPlayers memory ────────────────────
@@ -627,6 +687,8 @@ export default function ScoringPanel({
           addToMatchPlayers(qmNonStriker.name, qmNonStriker.existingId || undefined);
           addToMatchPlayers(qmBowler.name,     qmBowler.existingId     || undefined);
         }
+        // Re-fetch playerMap from server so display shows the new names immediately
+        onRefresh?.();
         setModal(null);
       };
 
@@ -1029,6 +1091,17 @@ export default function ScoringPanel({
           </div>
         )}
 
+
+        {/* Offline pill */}
+        {isOffline && (
+          <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+            <WifiOff size={13} className="text-amber-400 flex-shrink-0" />
+            <span className="text-amber-400 text-xs font-semibold">
+              Offline — {queueSize > 0 ? `${queueSize} ball${queueSize !== 1 ? 's' : ''} queued` : 'scoring will queue locally'}
+            </span>
+            {isSyncing && <Loader2 size={12} className="animate-spin text-amber-400 ml-auto" />}
+          </div>
+        )}
         {/* Runs on ball */}
         <div>
           <label className="text-xs text-slate-400 mb-2 block font-semibold uppercase tracking-wide">
@@ -1108,6 +1181,7 @@ export default function ScoringPanel({
           await renamePlayer(nextSlot, qmNewBowlerName.trim(), qmNewBowlerExId || undefined);
           setBall(b => ({ ...b, bowlerId: nextSlot }));
           addToMatchPlayers(qmNewBowlerName.trim(), qmNewBowlerExId || undefined);
+          onRefresh?.();
         } finally { setRenaming(false); }
         setQmNewBowlerName('');
         setQmNewBowlerExId('');
